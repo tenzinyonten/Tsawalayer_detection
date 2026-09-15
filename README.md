@@ -108,17 +108,36 @@ By default labels come from `data/processed/tsawa_spans_resolved.csv`
 to label raw `Tsawa.yml` instead. Cloned YAML is never rewritten.
 
 Tokenizes with `jhu-clsp/mmBERT-base`, labels `O` / `B-TSAWA` / `I-TSAWA`,
-slices overlapping token windows, and splits **by pecha** 80/10/10
-(stratified by audit coverage quartiles, seed 42).
+and slices overlapping token windows.
+
+Splits **by pecha**. Pass `--split-file` to use the frozen v2 assignment
+(recommended); without it the builder falls back to its original
+coverage-quartile split (seed 42), kept so older calls do not change.
 
 ```bash
+# v2 — frozen, window-balanced split (current)
+python src/build_tsawa_dataset.py --source combined \
+    --split-file data/processed/split_v2_frozen.csv \
+    --out-dir data/processed/tsawa_dataset_v2 \
+    --dropped-csv data/processed/dropped_spans_v2.csv
+
+# v1 — legacy coverage-quartile split
 python src/build_tsawa_dataset.py --source combined
-# or: --source new | --source old
-# rollback: --from-yaml
+# rollback to pre-snap YAML offsets: --from-yaml
 ```
 
-Useful flags: `--max-length 8192`, `--stride 5120`, `--seed 42`,
-`--tokenizer`, `--out-dir`, `--dropped-csv`, `--audit-csv`, `--sidecar`.
+Useful flags: `--split-file`, `--max-length 8192`, `--stride 5120`,
+`--seed 42`, `--tokenizer`, `--out-dir`, `--dropped-csv`, `--audit-csv`,
+`--sidecar`.
+
+### Document split v2 (frozen)
+
+`data/processed/split_v2_frozen.csv` + `split_v2_frozen.md`. Greedy
+window-balanced assignment (seed 123) stratified on batch, `n_windows`,
+tsawa density and short-span share, honouring 11 reprint must-link groups.
+It replaced the v1 split, whose token positive density was 4.70 / 4.17 /
+5.53 %; v2 is **4.76 / 4.77 / 4.42 %**. **The test split is frozen** — do
+not use it for tuning or model selection.
 
 Output: `data/processed/tsawa_dataset/` (`save_to_disk`) plus
 `dataset_card.md`. Aborts if the audit CSV drifted from the frozen Phase 2
