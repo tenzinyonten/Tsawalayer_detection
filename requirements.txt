@@ -1,0 +1,8 @@
+# Phase 1 (fetch) uses only the stdlib + git/gh on PATH.
+# Phases 2–3 need the packages below; install the full set when you get there.
+pyyaml>=6.0
+pandas>=2.0
+transformers>=4.40
+datasets>=2.18
+tokenizers>=0.15
+tqdm>=4.66

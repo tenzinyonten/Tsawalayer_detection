@@ -1,0 +1,37 @@
+# Cloned OpenPecha .opf repos (large; re-fetchable via src/fetch_opf_repos.py)
+data/raw_opf/
+!data/raw_opf/_manifest.csv
+
+# Throwaway analysis scripts and dumps
+scratch/
+
+# Training outputs
+runs/
+wandb/
+
+# Source ebooks (and unpacked copies)
+*.epub
+book_epub/
+
+# Built datasets (large Arrow shards); provenance CSVs + cards are tracked
+data/processed/tsawa_dataset/
+data/processed/tsawa_dataset_v2/
+!data/processed/tsawa_dataset*/dataset_card.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Hugging Face / model caches
+.cache/
+*.bin
+*.safetensors
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

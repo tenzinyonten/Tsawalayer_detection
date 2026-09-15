@@ -1,0 +1,18 @@
+repo_id,ann_id_a,ann_id_b,overlap_before,overlap_after,a_start,a_end,b_start,b_end,a_dropped,b_dropped,actions
+IB522F095,b39d58e1c795491688bfffd23f1ff45b,003cf4ac58c94a59b59ff1b35fce9faa,4,0,157511,157514,157514,157527,False,False,A:clip_to_overlap_start->157514
+IB522F095,9097e576f2804dadaa2a9b8a88439b65,b6196022dcf84bc1a843ab1689c433e3,6,0,167879,167882,167882,167893,False,False,A:clip_to_overlap_start->167882
+IB522F095,733d195010ed406897d8dc5305b4140c,056324c7492a4112b4517480a49a3fb6,6,0,169790,169810,169810,169810,False,True,A:cut_to_last_shad->169810 | B:start_after_punct->169810 | B:dropped_empty
+P000021,56cbe4905df24648938f0335aaccc712,2b2dbfb75023418eb08536e6ba99e183,7,0,190108,190371,190374,190408,False,False,B:trim_digits_head:༡༤ | A:cut_to_last_shad->190371 | B:start_after_punct->190374
+P000021,9dfab165680f467a978a302b75370e4b,983455619dbf411b9da120f3618aa310,6,0,224153,224693,224702,224706,False,False,B:trim_digits_head:༢༤ | A:cut_to_last_shad->224693 | B:start_after_punct->224702
+P000021,fa9121343dd9439fa4158e19dc4645ad,d008312213e141f29ed5dc94aa6fee3c,6,0,224726,224726,224726,224748,True,False,A:clip_to_overlap_start->224726 | A:dropped_empty
+P000117,47a02ba73c0841739c5a96d7c1fc7f7b,2ac9139cfdb2462684f8879cf45e5b4b,5,0,8918,9058,9074,9228,False,False,A:cut_to_last_shad->9058 | B:start_after_punct->9074
+P000144,f993f7fee11f4cd4a7050fb0f906d4b8,538790f97758487481cb1e0608234a3b,5,0,60904,61058,61080,61085,False,True,A:cut_to_last_shad->61058 | B:start_after_punct->61080 | B:dropped_suffix_stub
+P000144,817722c44f544dafbab5c3e0f2459532,da024dac6fee4406a73faf5593ae68cb,5,0,93995,94065,94084,94104,False,False,A:cut_to_last_shad->94065 | B:start_after_punct->94084
+P000195,cae2e5952ba540cab5d543aad8d63002,f1de82c609e9424dbf1a3bb953dc467a,4,0,93617,93790,93794,93798,False,True,A:trim_citation:ཞེས་ | A:trim_bracket_tail:[༥] | B:dropped_marker_only
+P000195,05db9ed17e444499a5972d15e415fc77,6c3f032bee074f9dada2fba4758fe9dd,5,0,107132,107226,107236,107427,False,False,A:cut_to_last_shad->107226 | B:start_after_punct->107236
+P000195,0fdc73518bd14c0c8894516eb11142a0,b8cb79c7efa3422ab07bb71a8a3fc750,6,0,128386,128563,128572,128578,False,True,A:trim_citation:ཅེས་གསུངས་ | A:trim_bracket_tail:[༥༥] | B:dropped_marker_only
+P000195,a067684362f9419aab1e7d2431642b66,ac4a8eebc2bc4a299f349c6cfba3832b,6,0,135929,136104,136113,136122,False,False,A:trim_citation:ཅེས་གསུངས་ | A:trim_bracket_tail:[༦༦]
+P000195,7b22c5fcb3274909afdc7a30f40bcffe,07b1ee1201204762a0b214ff898ce1e0,5,0,176611,176779,176799,176848,False,False,A:cut_to_last_shad->176779 | B:start_after_punct->176799
+P000195,c5b9930e44a74ded89f7df78f5c7f87a,b336f7db69d94e488b3b6935c6e96c3a,5,0,182788,183154,183155,183160,False,True,A:cut_to_last_shad->183154 | B:start_after_punct->183155 | B:dropped_suffix_stub
+P000195,dab1b323a2d24d35aa5af436d76acf0f,55a0045c10a64ea7976ad9bc3c2a6342,6,0,217420,217604,217615,217621,False,False,A:cut_to_last_shad->217604 | B:start_after_punct->217615
+P000269,132c5e2c2f0245dbaacc4221acc1b58d,57c08c09f32347b7971dd48bdef2c6fe,5,0,64770,64864,64889,65024,False,False,A:cut_to_last_shad->64864 | B:start_after_punct->64889
