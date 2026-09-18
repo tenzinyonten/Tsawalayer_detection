@@ -39,6 +39,8 @@ import argparse
 import csv
 import random
 import sys
+from bisect import bisect_right
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,10 @@ HIGH_DENSITY_OUTLIER = "IFE0B60AA"
 
 LABEL2ID = {"O": 0, "B-TSAWA": 1, "I-TSAWA": 2}
 ID2LABEL = {0: "O", 1: "B-TSAWA", 2: "I-TSAWA"}
+# 5-label variant: adds the quotation class so the model can learn to reject
+# citations from other works instead of scoring them as tsawa.
+LABEL2ID_5 = {"O": 0, "B-TSAWA": 1, "I-TSAWA": 2, "B-QUOTE": 3, "I-QUOTE": 4}
+ID2LABEL_5 = {v: k for k, v in LABEL2ID_5.items()}
 IGNORE_LABEL = -100  # special tokens + padding (Trainer-compatible)
 
 DEFAULT_TOKENIZER = "jhu-clsp/mmBERT-base"
@@ -141,6 +147,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Frozen split CSV (pecha_id,split[,group_id]); '#' lines are comments. "
         "Overrides the built-in coverage-quartile split. Splits: train/val|validation/test.",
+    )
+    p.add_argument(
+        "--quote-sidecar",
+        type=Path,
+        default=None,
+        help="Snapped Quotation/Citation span CSV. Switches the build to the "
+        "5-label scheme (O/B-TSAWA/I-TSAWA/B-QUOTE/I-QUOTE). TSAWA wins overlaps.",
     )
     p.add_argument(
         "--exclude-pechas",
@@ -331,18 +344,25 @@ def load_sidecar_spans(path: Path) -> tuple[dict[str, list[tuple[int, int, str]]
 def label_tokens(
     offsets: list[tuple[int, int]],
     spans: list[tuple[int, int, str]],
+    label2id: dict[str, int] | None = None,
 ) -> list[int]:
-    """Assign O / B-TSAWA / I-TSAWA using the token-start rule.
+    """Assign O / B-<CLS> / I-<CLS> using the token-start rule.
 
     A token whose offset range straddles a span boundary is classified by
     ``token_start`` only: inside → B/I, outside → O. First token of each
     span (by token index) is B; later tokens whose start falls in the same
     span are I.
+
+    ``spans`` are ``(start, end, ann_id)`` and default to class ``TSAWA``, or
+    ``(start, end, ann_id, cls)`` for the multiclass build. Spans must be
+    sorted by start and non-overlapping.
     """
-    labels = [LABEL2ID["O"]] * len(offsets)
+    label2id = label2id or LABEL2ID
+    labels = [label2id["O"]] * len(offsets)
     if not spans:
         return labels
-    starts = [s for s, _e, _i in spans]
+    starts = [sp[0] for sp in spans]
+    classes = [sp[3] if len(sp) > 3 else "TSAWA" for sp in spans]
     first_seen: set[int] = set()
     for i, (tok_s, tok_e) in enumerate(offsets):
         if tok_e <= tok_s:
@@ -361,7 +381,7 @@ def label_tokens(
         # Walk left in case of any unexpected overlap / equal starts.
         found = -1
         for j in range(idx, -1, -1):
-            s, e, _a = spans[j]
+            s, e = spans[j][0], spans[j][1]
             if e <= tok_s:
                 continue
             if s <= tok_s < e:
@@ -371,12 +391,89 @@ def label_tokens(
                 break
         if found < 0:
             continue
+        cls = classes[found]
         if found not in first_seen:
             first_seen.add(found)
-            labels[i] = LABEL2ID["B-TSAWA"]
+            labels[i] = label2id[f"B-{cls}"]
         else:
-            labels[i] = LABEL2ID["I-TSAWA"]
+            labels[i] = label2id[f"I-{cls}"]
     return labels
+
+
+def merge_intervals(pairs) -> list[tuple[int, int]]:
+    """Sorted, coalesced [start, end) intervals."""
+    out: list[tuple[int, int]] = []
+    for s, e in sorted(pairs):
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
+def in_intervals(intervals: list[tuple[int, int]], pos: int) -> bool:
+    """Membership test against the output of ``merge_intervals``."""
+    i = bisect_right(intervals, (pos, float("inf"))) - 1
+    return i >= 0 and intervals[i][0] <= pos < intervals[i][1]
+
+
+def apply_tsawa_precedence(
+    tsawa: list[tuple[int, int, str]],
+    quote: list[tuple[int, int, str]],
+) -> tuple[list[tuple[int, int, str, str]], dict[str, int]]:
+    """Merge tsawa and quotation spans into one non-overlapping sorted list.
+
+    Precedence rule: **TSAWA wins every conflict**, because it is the target
+    class and a token labeled QUOTE that is really root text is a false
+    negative on the class we care about. Each quotation span is carved by the
+    tsawa intervals it meets; the surviving pieces stay QUOTE. A quotation
+    span cut in two by a tsawa span yields two pieces, and the second one
+    opens a fresh ``B-QUOTE`` since it is a separate contiguous run.
+
+    Returns the merged spans and a counter of what precedence cost.
+    """
+    tsawa = sorted(tsawa, key=lambda t: (t[0], t[1]))
+    quote = sorted(quote, key=lambda t: (t[0], t[1]))
+    stats = Counter()
+    merged: list[tuple[int, int, str, str]] = [(s, e, a, "TSAWA") for s, e, a in tsawa]
+
+    for qs, qe, qa in quote:
+        stats["quote_spans_in"] += 1
+        pieces = [(qs, qe)]
+        for ts, te, _ta in tsawa:
+            if te <= qs or ts >= qe:
+                continue
+            nxt = []
+            for ps, pe in pieces:
+                if te <= ps or ts >= pe:
+                    nxt.append((ps, pe))
+                    continue
+                stats["chars_suppressed"] += min(pe, te) - max(ps, ts)
+                if ps < ts:
+                    nxt.append((ps, ts))
+                if te < pe:
+                    nxt.append((te, pe))
+            pieces = nxt
+        if len(pieces) == 1 and pieces[0] == (qs, qe):
+            merged.append((qs, qe, qa, "QUOTE"))
+            continue
+        stats["quote_spans_touched"] += 1
+        if not pieces:
+            stats["quote_spans_dropped"] += 1
+            continue
+        if len(pieces) > 1:
+            stats["quote_spans_fragmented"] += 1
+        stats["quote_spans_clipped"] += 1
+        for k, (ps, pe) in enumerate(sorted(pieces)):
+            if pe > ps:
+                merged.append((ps, pe, f"{qa}#{k}" if k else qa, "QUOTE"))
+
+    merged.sort(key=lambda t: (t[0], t[1]))
+    for a, b in zip(merged, merged[1:]):
+        if b[0] < a[1]:
+            raise SystemExit(f"precedence left an overlap: {a} vs {b}")
+    stats["quote_spans_out"] = sum(1 for m in merged if m[3] == "QUOTE")
+    return merged, stats
 
 
 def sliding_windows(n_tokens: int, content_len: int, stride: int) -> list[tuple[int, int]]:
@@ -546,7 +643,10 @@ def write_dataset_card(
     outlier_windows: dict[str, int],
     outlier_pos_share: dict[str, float],
     sidecar_note: str = "",
+    quote_note: str = "",
+    label2id: dict[str, int] | None = None,
 ) -> None:
+    label2id = label2id or LABEL2ID
     lines = [
         "# tsawa binary BIO dataset",
         "",
@@ -572,7 +672,7 @@ def write_dataset_card(
         "",
         "## Labels",
         "",
-        f"- `{LABEL2ID}` / `{ID2LABEL}`",
+        f"- `{label2id}`",
         "- Special tokens and padding use label `-100`.",
         "- Token / span straddles: labeled by the token **start** offset.",
         "",
@@ -788,6 +888,47 @@ def main(argv: list[str] | None = None) -> int:
             f"- Log of excluded sidecar rows: `{args.dropped_csv}`."
         )
 
+    multiclass = args.quote_sidecar is not None
+    label2id = LABEL2ID_5 if multiclass else LABEL2ID
+    id2label = ID2LABEL_5 if multiclass else ID2LABEL
+    quote_by_repo: dict[str, list[tuple[int, int, str]]] = {}
+    precedence_stats: Counter = Counter()
+    docs_with_quote = 0
+    quote_note = ""
+    if multiclass:
+        qpath = args.quote_sidecar.expanduser().resolve()
+        if not qpath.is_file():
+            raise SystemExit(f"Quote sidecar not found: {qpath}")
+        n_q_rows = n_q_drop = 0
+        with qpath.open(newline="", encoding="utf-8") as fh:
+            for r in csv.DictReader(fh):
+                n_q_rows += 1
+                if str(r.get("dropped", "")).lower() == "true":
+                    n_q_drop += 1
+                    continue
+                s, e = int(r["start"]), int(r["end"])
+                if e <= s:
+                    n_q_drop += 1
+                    continue
+                quote_by_repo.setdefault(r["pecha_id"], []).append((s, e, r["ann_id"]))
+        for v in quote_by_repo.values():
+            v.sort()
+        n_q_active = n_q_rows - n_q_drop
+        print(
+            f"Quote sidecar {qpath.name}: {n_q_rows:,} rows, {n_q_active:,} active, "
+            f"{n_q_drop} dropped, {len(quote_by_repo)} books"
+        )
+        print("5-label build: O / B-TSAWA / I-TSAWA / B-QUOTE / I-QUOTE (TSAWA wins overlaps)")
+        quote_note = (
+            f"- Quotation labels from `{qpath}` (merged `Quotation.yml` old batch + "
+            f"`Citation.yml` new batch, snapped by `src/snap_quotation_boundaries.py`).\n"
+            f"- **{n_q_active:,}** quotation spans over **{len(quote_by_repo)}** books; "
+            f"{n_q_drop} sidecar rows dropped as quote-quote overlap stubs.\n"
+            "- **Precedence: TSAWA wins.** Where a quotation span overlaps a tsawa span "
+            "the overlapping characters are labeled TSAWA and the quotation span is "
+            "carved around them."
+        )
+
     dropped_rows: list[dict[str, Any]] = []
     split_examples: dict[str, list[dict[str, Any]]] = {
         "train": [],
@@ -821,6 +962,15 @@ def main(argv: list[str] | None = None) -> int:
                     f"audit n_zero_length={expected_drop}"
                 )
 
+        tsawa_only = spans
+        if multiclass:
+            quote_spans = quote_by_repo.get(pecha_id, [])
+            spans, prec = apply_tsawa_precedence(spans, quote_spans)
+            for k, v in prec.items():
+                precedence_stats[k] += v
+            if quote_spans:
+                docs_with_quote += 1
+
         enc = tokenizer(
             text,
             add_special_tokens=False,
@@ -830,7 +980,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         input_ids = list(enc["input_ids"])
         offsets = [(int(s), int(e)) for s, e in enc["offset_mapping"]]
-        labels = label_tokens(offsets, spans)
+        labels = label_tokens(offsets, spans, label2id)
+
+        if multiclass and quote_spans:
+            # Tokens the raw quotation layer claimed but TSAWA took.
+            tsa = merge_intervals((s, e) for s, e, _a in tsawa_only)
+            qsm = merge_intervals((s, e) for s, e, _a in quote_spans)
+            for tok_s, tok_e in offsets:
+                if tok_e > tok_s and in_intervals(qsm, tok_s) and in_intervals(tsa, tok_s):
+                    precedence_stats["tokens_suppressed"] += 1
         windows = sliding_windows(len(input_ids), content_len, args.stride)
         split_name = split_of[pecha_id]
         for w_i, (w_s, w_e) in enumerate(windows):
@@ -918,7 +1076,7 @@ def main(argv: list[str] | None = None) -> int:
     dset.save_to_disk(str(out_dir))
     (out_dir / "label_map.json").write_text(
         __import__("json").dumps(
-            {"label2id": LABEL2ID, "id2label": {str(k): v for k, v in ID2LABEL.items()}},
+            {"label2id": label2id, "id2label": {str(k): v for k, v in id2label.items()}},
             indent=2,
         )
         + "\n",
@@ -958,7 +1116,8 @@ def main(argv: list[str] | None = None) -> int:
         tokenizer_name=args.tokenizer,
         outlier_windows={s: outlier_window_count(s) for s in split_examples},
         outlier_pos_share={s: outlier_pos_share(s) for s in split_examples},
-        sidecar_note=sidecar_note,
+        sidecar_note=sidecar_note + ("\n" + quote_note if quote_note else ""),
+        label2id=label2id,
     )
 
     print("\n=== tsawa dataset ===")
@@ -972,6 +1131,18 @@ def main(argv: list[str] | None = None) -> int:
             f"windows={len(split_examples[name]):5d}  "
             f"pos-tokens={pos:,}/{total:,} ({pct:.3f}%)"
         )
+    if multiclass:
+        s = precedence_stats
+        print(f"\n=== TSAWA-wins precedence ({docs_with_quote} books with a quote layer) ===")
+        print(f"  quotation spans in        : {s['quote_spans_in']:,}")
+        print(f"  untouched by a tsawa span : "
+              f"{s['quote_spans_in'] - s['quote_spans_touched']:,}")
+        print(f"  clipped by a tsawa span   : {s['quote_spans_clipped']:,}"
+              f"  (of which split in two: {s['quote_spans_fragmented']:,})")
+        print(f"  fully swallowed (dropped) : {s['quote_spans_dropped']:,}")
+        print(f"  quotation spans out       : {s['quote_spans_out']:,}")
+        print(f"  characters suppressed     : {s['chars_suppressed']:,}")
+        print(f"  TOKENS suppressed         : {s['tokens_suppressed']:,}")
     print("No training was run.")
     return 0
 
