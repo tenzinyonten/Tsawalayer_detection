@@ -14,8 +14,7 @@ wandb/
 book_epub/
 
 # Built datasets (large Arrow shards); provenance CSVs + cards are tracked
-data/processed/tsawa_dataset/
-data/processed/tsawa_dataset_v2/
+data/processed/tsawa_dataset*/
 !data/processed/tsawa_dataset*/dataset_card.md
 
 # Python
