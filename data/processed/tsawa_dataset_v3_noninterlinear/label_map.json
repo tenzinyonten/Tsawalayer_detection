@@ -1,0 +1,12 @@
+{
+  "label2id": {
+    "O": 0,
+    "B-TSAWA": 1,
+    "I-TSAWA": 2
+  },
+  "id2label": {
+    "0": "O",
+    "1": "B-TSAWA",
+    "2": "I-TSAWA"
+  }
+}

@@ -143,6 +143,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "Overrides the built-in coverage-quartile split. Splits: train/val|validation/test.",
     )
     p.add_argument(
+        "--exclude-pechas",
+        default="",
+        help="Comma-separated pecha IDs to drop from TRAIN. Refuses to drop a "
+        "validation/test document, so eval sets stay frozen.",
+    )
+    p.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -705,6 +711,36 @@ def main(argv: list[str] | None = None) -> int:
         split_of.update({pid: "test" for pid in test_ids})
     if len(split_of) != len(selected):
         raise SystemExit("split assignment lost or duplicated a document")
+
+    excluded = [p.strip() for p in args.exclude_pechas.split(",") if p.strip()]
+    exclude_note = ""
+    if excluded:
+        dupes = sorted({p for p in excluded if excluded.count(p) > 1})
+        if dupes:
+            raise SystemExit(f"--exclude-pechas repeats: {', '.join(dupes)}")
+        unknown = [p for p in excluded if p not in split_of]
+        if unknown:
+            raise SystemExit(
+                "--exclude-pechas lists pecha(s) not in this build: " + ", ".join(unknown)
+            )
+        protected = [p for p in excluded if split_of[p] != "train"]
+        if protected:
+            raise SystemExit(
+                "--exclude-pechas may only drop train documents; refusing to change "
+                "the frozen eval splits: "
+                + ", ".join(f"{p} ({split_of[p]})" for p in protected)
+            )
+        keep = set(split_of) - set(excluded)
+        selected = selected[selected["pecha_id"].astype(str).isin(keep)].reset_index(drop=True)
+        split_of = {p: s for p, s in split_of.items() if p in keep}
+        train_ids = [p for p in train_ids if p in keep]
+        exclude_note = (
+            f"Excluded from train: {', '.join(sorted(excluded))} "
+            f"({len(excluded)} document(s); validation and test unchanged)"
+        )
+        print(exclude_note)
+        split_note = f"{split_note}. {exclude_note}"
+
     if not (train_ids and val_ids and test_ids):
         raise SystemExit("split assignment left a split empty")
 
