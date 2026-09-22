@@ -34,3 +34,5 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+data/processed/sabche_dataset*/
+!data/processed/sabche_dataset*/dataset_card.md
