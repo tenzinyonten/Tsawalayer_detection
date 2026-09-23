@@ -163,9 +163,17 @@ tokenization).
 
 ## Caveats
 
-- There's no `v2_metrics.py` in this repo. The closest is
-  `scripts/eval/span_metrics.py`; confirm it's the same IoU@0.5 greedy
-  implementation before comparing numbers.
+- Metric: `v2_metrics.py` lives in the team repo
+  (`src/layer_detection/v2_metrics.py`), not here. Use
+  `scripts/eval/eval_viterbi_iou.py` (`inclusive_iou`, `match_iou`, `score`).
+  It implements the same scheme: IoU ≥ 0.5, inclusive offsets, greedy
+  best-first one-to-one matching, and it runs on this dataset's 3 BIO labels
+  unchanged. `train_tsawa.py` (`iou`, `count_matches`) has the same logic in
+  the working copy, but it isn't committed yet. Don't use
+  `scripts/eval/span_metrics.py`: it does no one-to-one matching, scores
+  partial overlaps as 0, and approximates false positives. Scoring is per
+  window, so a span that falls in two overlapping windows is counted twice,
+  the same as for tsawa.
 - Titled-heading recall is between 0.2 and 0.5 in 21 kept books, so they're
   partly annotated and some real headings are labeled O.
 - Bare `Nth-པ་ནི།` headings are inconsistently annotated (29%).
