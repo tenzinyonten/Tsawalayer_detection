@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
-"""Frozen book-level split for the Chapter dataset.
+"""Frozen book-level split for the Chapter dataset, stratified.
 
-* Books: every book with at least one cleaned Chapter span, minus books whose
-  verdict in ``chapter_book_verdicts.csv`` is ``exclude``. Books with no
-  Chapter layer are not in the dataset (nothing to learn from).
-* Books already in ``tsawa/data/processed/split_v3_frozen.csv`` keep their split.
-* The remaining books are placed greedily, largest first, into the split with
-  the largest relative deficit against 83/8.5/8.5 by window count
-  (8192 tokens / 5120 stride), as for Sabche.
-* The only constraint is that a book never sits in more than one split.
-  Text shared between different books is not treated as leakage.
+Books: every book with at least one cleaned Chapter span, minus books whose
+verdict in ``chapter_book_verdicts.csv`` is ``exclude``.
+
+The split is a greedy multi-objective assignment, as for tsawa v2/v3: books are
+placed largest first into the split that gives the lowest score, then improved
+by single-book moves and pairwise swaps. The score is the sum, over train/val/test,
+of squared *relative* deviations from the global value of
+
+    * window share vs the 83/8.5/8.5 target   (8192-token windows, stride 5120)
+    * Chapter spans per window                 (annotation density)
+    * share of short spans (< 30 characters)   (short chapter numbers etc.)
+    * share of windows from old-batch (P) books
+
+The only hard constraints are one book, one split, and at least ``MIN_DOCS``
+books in val and test. Text shared between different books is not treated as
+leakage. With ``--keep-v3`` the books already in tsawa's frozen split_v3 keep
+their split and only the rest are optimised; without it every book is free.
+The seed with the lowest score among ``SEEDS`` is kept.
 
 Usage:
-    python chapter/src/prepare_chapter_split.py
+    python chapter/src/prepare_chapter_split.py [--keep-v3] [--out PATH]
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import random
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -38,83 +48,181 @@ OUT_REPORT = ROOT / "scratch/chapter/splits/chapter_split_report.json"
 TOKENIZER = "jhu-clsp/mmBERT-base"
 CONTENT_LEN = 8190  # 8192 - CLS - SEP
 STRIDE = 5120
-SEED = 123
+SHORT_MAX = 29      # a span under 30 characters counts as short
+MIN_DOCS = 30
 TARGETS = {"train": 0.83, "val": 0.085, "test": 0.085}
+SEEDS = [0, 1, 2, 3, 7, 11, 13, 17, 19, 42, 99, 123, 256, 2026]
+WEIGHTS = {"windows": 3.0, "spw": 2.0, "short": 1.0, "batch": 1.0}
+SPLITS = ("train", "val", "test")
 
 
-def main() -> int:
+def split_stats(rows, assign):
+    st = {s: {"docs": 0, "win": 0, "spans": 0, "short": 0, "old": 0} for s in SPLITS}
+    for r in rows:
+        s = st[assign[r["id"]]]
+        s["docs"] += 1
+        s["win"] += r["win"]
+        s["spans"] += r["spans"]
+        s["short"] += r["short"]
+        s["old"] += r["win"] if r["batch"] == "old" else 0
+    return st
+
+
+def score(st, g):
+    tot_w = sum(x["win"] for x in st.values()) or 1
+    sc = 0.0
+    for sp in SPLITS:
+        x = st[sp]
+        w = max(x["win"], 1)
+        sc += WEIGHTS["windows"] * ((x["win"] / tot_w - TARGETS[sp]) / TARGETS[sp]) ** 2
+        sc += WEIGHTS["spw"] * ((x["spans"] / w - g["spw"]) / g["spw"]) ** 2
+        sc += WEIGHTS["short"] * ((x["short"] / max(x["spans"], 1) - g["short"]) / g["short"]) ** 2
+        sc += WEIGHTS["batch"] * ((x["old"] / w - g["old"]) / g["old"]) ** 2
+    return sc
+
+
+def assign_books(rows, fixed, g, seed):
+    rng = random.Random(seed)
+    assign = dict(fixed)
+    free = [r for r in rows if r["id"] not in fixed]
+    free.sort(key=lambda r: (-r["win"], rng.random()))
+    rows_placed = [r for r in rows if r["id"] in fixed]
+
+    def cur_score(extra):
+        sub = rows_placed + extra
+        return score(split_stats(sub, assign), g)
+
+    placed = list(rows_placed)
+    for r in free:
+        best, best_sc = None, None
+        for sp in SPLITS:
+            assign[r["id"]] = sp
+            sc = score(split_stats(placed + [r], assign), g)
+            if best_sc is None or sc < best_sc:
+                best, best_sc = sp, sc
+        assign[r["id"]] = best
+        placed.append(r)
+
+    def ok(a):
+        st = split_stats(rows, a)
+        return st["val"]["docs"] >= MIN_DOCS and st["test"]["docs"] >= MIN_DOCS
+
+    cur = score(split_stats(rows, assign), g)
+    movable = [r["id"] for r in free]
+    for _ in range(6):
+        improved = False
+        for p in movable:  # single-book moves
+            for sp in SPLITS:
+                if sp == assign[p]:
+                    continue
+                old = assign[p]
+                assign[p] = sp
+                sc = score(split_stats(rows, assign), g)
+                if sc + 1e-12 < cur and ok(assign):
+                    cur, improved = sc, True
+                else:
+                    assign[p] = old
+        for i, p in enumerate(movable):  # pairwise swaps
+            for q in movable[i + 1:]:
+                if assign[p] == assign[q]:
+                    continue
+                assign[p], assign[q] = assign[q], assign[p]
+                sc = score(split_stats(rows, assign), g)
+                if sc + 1e-12 < cur and ok(assign):
+                    cur, improved = sc, True
+                else:
+                    assign[p], assign[q] = assign[q], assign[p]
+        if not improved:
+            break
+    return assign, cur
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--keep-v3", action="store_true",
+                    help="books in tsawa split_v3 keep their split")
+    ap.add_argument("--out", type=Path, default=OUT_SPLIT)
+    args = ap.parse_args(argv)
+
     audit = {r["pecha_id"]: r for r in csv.DictReader(AUDIT.open(encoding="utf-8"))}
     verdict = {r["pecha_id"]: r for r in csv.DictReader(VERDICTS.open(encoding="utf-8"))}
     v3 = {r["pecha_id"]: r["split"] for r in csv.DictReader(
         l for l in SPLIT_V3.open(encoding="utf-8") if not l.startswith("#"))}
     excluded = {p for p, v in verdict.items() if v["verdict"] == "exclude"}
 
-    spans = defaultdict(int)
+    lens = defaultdict(list)
     for r in csv.DictReader(CLEAN.open(encoding="utf-8")):
         if r["dropped"] != "True" and r["pecha_id"] not in excluded:
-            spans[r["pecha_id"]] += 1
-    books = sorted(spans)
+            lens[r["pecha_id"]].append(int(r["end"]) - int(r["start"]))
+    books = sorted(lens)
     print(f"books kept {len(books)}  excluded {len(excluded)}")
 
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(TOKENIZER, use_fast=True)
     tok.model_max_length = int(1e12)
-    n_tok, n_win = {}, {}
+    rows, n_tok = [], {}
     for p in books:
         t = Path(audit[p]["base_path"]).read_text(encoding="utf-8")
         n_tok[p] = len(tok(t, add_special_tokens=False)["input_ids"])
-        n_win[p] = len(sliding_windows(n_tok[p], CONTENT_LEN, STRIDE))
+        rows.append({"id": p, "batch": "old" if p.startswith("P") else "new",
+                     "win": len(sliding_windows(n_tok[p], CONTENT_LEN, STRIDE)),
+                     "spans": len(lens[p]), "short": sum(L <= SHORT_MAX for L in lens[p])})
+    tw = sum(r["win"] for r in rows)
+    g = {"spw": sum(r["spans"] for r in rows) / tw,
+         "short": sum(r["short"] for r in rows) / sum(r["spans"] for r in rows),
+         "old": sum(r["win"] for r in rows if r["batch"] == "old") / tw}
+    fixed = {p: v3[p] for p in books if p in v3} if args.keep_v3 else {}
+    print(f"global: spans/window {g['spw']:.3f}  short {100 * g['short']:.1f}%  old windows {100 * g['old']:.1f}%")
+    print(f"fixed from split_v3: {len(fixed)}")
 
-    assign = {p: v3[p] for p in books if p in v3}
-    free = [p for p in books if p not in v3]
-    total_w = sum(n_win.values())
-    cur = Counter()
-    for p, sp in assign.items():
-        cur[sp] += n_win[p]
-    rng = random.Random(SEED)
-    free.sort(key=lambda p: (-n_win[p], rng.random()))
-    for p in free:
-        sp = max(TARGETS, key=lambda s: (TARGETS[s] * total_w - cur[s]) / TARGETS[s])
-        assign[p] = sp
-        cur[sp] += n_win[p]
+    best = None
+    for seed in SEEDS:
+        a, sc = assign_books(rows, fixed, g, seed)
+        print(f"  seed {seed:4}: score {sc:.5f}")
+        if best is None or sc < best[1]:
+            best = (a, sc, seed)
+    assign, sc, seed = best
+    st = split_stats(rows, assign)
 
+    print(f"\nbest seed {seed}  score {sc:.5f}")
+    print(f"{'split':6}{'books':>6}{'old/new':>9}{'windows':>9}{'win%':>7}{'spans':>7}{'spans/win':>10}{'short%':>8}{'old-win%':>9}")
     stats = {}
-    for sp in TARGETS:
-        m = [p for p in books if assign[p] == sp]
-        stats[sp] = {
-            "books": len(m), "old": sum(p.startswith("P") for p in m),
-            "new": sum(p.startswith("I") for p in m),
-            "windows": sum(n_win[p] for p in m),
-            "pct_windows": round(100 * sum(n_win[p] for p in m) / total_w, 1),
-            "chapter_spans": sum(spans[p] for p in m),
-            "from_split_v3": sum(p in v3 for p in m),
-        }
+    for sp in SPLITS:
+        x = st[sp]
+        n_old = sum(1 for r in rows if assign[r["id"]] == sp and r["batch"] == "old")
+        stats[sp] = {"books": x["docs"], "old_books": n_old, "new_books": x["docs"] - n_old,
+                     "windows": x["win"], "pct_windows": round(100 * x["win"] / tw, 2),
+                     "spans": x["spans"], "spans_per_window": round(x["spans"] / x["win"], 3),
+                     "pct_short": round(100 * x["short"] / max(x["spans"], 1), 1),
+                     "pct_old_windows": round(100 * x["old"] / x["win"], 1),
+                     "from_split_v3": sum(1 for r in rows if assign[r["id"]] == sp and r["id"] in fixed)}
         s = stats[sp]
-        print(f"{sp:5} books={s['books']:3} (old {s['old']}, new {s['new']}, v3 {s['from_split_v3']}) "
-              f"windows={s['windows']} ({s['pct_windows']}%) spans={s['chapter_spans']:,}")
+        print(f"{sp:6}{s['books']:6}{s['old_books']:>4}/{s['new_books']:<4}{s['windows']:9}{s['pct_windows']:7.1f}"
+              f"{s['spans']:7}{s['spans_per_window']:10.3f}{s['pct_short']:8.1f}{s['pct_old_windows']:9.1f}")
 
-    OUT_SPLIT.parent.mkdir(parents=True, exist_ok=True)
-    with OUT_SPLIT.open("w", newline="", encoding="utf-8") as fh:
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with args.out.open("w", newline="", encoding="utf-8") as fh:
         fh.write(
             "# chapter layer-detection document split — FROZEN\n"
             f"# generated: {date.today().isoformat()}\n"
-            "# generator: chapter/src/prepare_chapter_split.py\n"
-            f"# seed: {SEED}\n"
-            "# base: split_v3_frozen.csv assignments kept\n"
-            "# constraint: one book, one split. No grouping of books that share text.\n"
-            f"# targets for new books: {TARGETS['train']:.0%}/{TARGETS['val']:.1%}/{TARGETS['test']:.1%} "
-            "by WINDOW count (8192 / 5120)\n"
+            "# generator: chapter/src/prepare_chapter_split.py (greedy multi-objective)\n"
+            f"# seed: {seed}\n"
+            f"# targets: {TARGETS['train']:.0%}/{TARGETS['val']:.1%}/{TARGETS['test']:.1%} by WINDOW count (8192 / 5120)\n"
+            "# stratified on: batch, n_windows, chapter spans per window, pct_short (<30 chars)\n"
+            f"# split_v3 assignments kept: {args.keep_v3}\n"
+            "# constraint: one book, one split; no grouping of books that share text\n"
             "# span source: chapter/data/processed/chapter_spans_clean.csv (dropped=False)\n"
             "# TEST SPLIT IS FROZEN: evaluate test once at the end, never for tuning.\n")
         w = csv.DictWriter(fh, fieldnames=["pecha_id", "split", "n_tokens", "n_windows", "n_chapter_spans"])
         w.writeheader()
-        for p in books:
-            w.writerow({"pecha_id": p, "split": assign[p], "n_tokens": n_tok[p],
-                        "n_windows": n_win[p], "n_chapter_spans": spans[p]})
+        for r in rows:
+            w.writerow({"pecha_id": r["id"], "split": assign[r["id"]], "n_tokens": n_tok[r["id"]],
+                        "n_windows": r["win"], "n_chapter_spans": r["spans"]})
     OUT_REPORT.parent.mkdir(parents=True, exist_ok=True)
-    OUT_REPORT.write_text(json.dumps({"stats": stats, "excluded": sorted(excluded)}, indent=2))
-    print(f"wrote {OUT_SPLIT}")
+    OUT_REPORT.write_text(json.dumps({"seed": seed, "score": sc, "global": g, "stats": stats,
+                                      "keep_v3": args.keep_v3, "excluded": sorted(excluded)}, indent=2))
+    print(f"wrote {args.out}")
     return 0
 
 

@@ -27,9 +27,10 @@ configs:
 # Chapter (ལེའུ་, chapter heading) dataset — mmBERT BIO
 
 Binary token classification for the Chapter layer, built with the same
-labeling and windowing as the tsawa and sabche datasets. Generated 2026-09-24.
+labeling and windowing as the tsawa and sabche datasets. Generated 2026-09-24 (split rebuilt with stratification the same day).
 
-Split: 83/8.5/8.5 by window count (`chapter_split_frozen.csv`), by book only.
+Split: 83/8.5/8.5 by window count, stratified on batch, spans per window and
+share of short spans (`chapter_split_frozen.csv`), by book only.
 
 | item | value |
 |---|---|
@@ -43,23 +44,26 @@ Split: 83/8.5/8.5 by window count (`chapter_split_frozen.csv`), by book only.
 
 ## Size
 
-| split | books | windows | Chapter spans |
-|---|---|---|---|
-| train | 304 (115 old, 189 new) | 9,188 | 2,292 |
-| validation | 37 (15 old, 22 new) | 941 | 477 |
-| test | 37 (13 old, 24 new) | 941 | 273 |
+| split | books | old / new | windows | Chapter spans | spans per window | short spans (<30 chars) | old-batch windows |
+|---|---|---|---|---|---|---|---|
+| train | 308 | 114 / 194 | 9,165 (82.8%) | 2,509 | 0.274 | 31.8% | 49.3% |
+| validation | 34 | 13 / 21 | 965 (8.7%) | 275 | 0.285 | 34.5% | 49.2% |
+| test | 36 | 16 / 20 | 940 (8.5%) | 258 | 0.274 | 32.2% | 49.3% |
 
-Train tokens: 75.0M `O`, 3,339 `B-CHAPTER`, 120,869 `I-CHAPTER` (windows overlap,
-so a token is counted once per window it appears in). Chapter is about 0.16% of
-tokens, far sparser than the other layers. Inverse-frequency weights from train
-are about 7,500 (B) and 207 (I) against 0.33 (O).
+Train tokens: 74.8M `O`, 3,688 `B-CHAPTER`, 129,338 `I-CHAPTER` (windows overlap,
+so a token is counted once per window it appears in). Chapter is about 0.18% of
+tokens, far sparser than the other layers. `train_layer.py`'s default `inv` weights
+(relative to `O`) come out around 20,000 (B) and 580 (I); `sqrt_inv` gives about
+142 and 24, which is the setting to start from.
 
 ## Pipeline
 
 ```bash
 python chapter/src/clean_chapter_spans.py      # sidecar + book verdicts
-python chapter/src/prepare_chapter_split.py    # frozen book-level split
+python chapter/src/prepare_chapter_split.py --keep-v3   # frozen, stratified book-level split
 python chapter/src/build_chapter_dataset.py
+python chapter/src/check_chapter_leakage.py    # optional, read-only
+python chapter/src/push_chapter_dataset.py --private
 ```
 
 ## Cleaning
@@ -81,15 +85,29 @@ Raw `Chapter.yml` offsets from 394 books with a Chapter layer (159 old, 235 new;
   in the five largest cases checked (out of 131 spans).
 - **Short spans are kept.** 306 raw spans are under 15 characters (short chapter
   numbers like `ལེའུ་བརྒྱད་པ`), plus a few 2-character stubs such as `༼ཇ`.
-- **Splitting.** Books already in tsawa split v3 keep their split; the rest are placed
-  by window count. Text shared between different books is not treated as leakage
-  (about 10% of long Chapter spans also appear in another book); only a book never
-  appears in more than one split.
+- **Splitting.** A greedy multi-objective assignment (books largest first, then
+  single-book moves and swaps, best of 14 seeds) minimises the deviation of window
+  share, Chapter spans per window, share of short spans (under 30 characters) and
+  old-batch window share across train/val/test. The 97 books already in tsawa
+  split v3 keep their split so val/test books stay frozen across layers; the rest
+  are optimised. The only hard constraints are one book, one split, and at least 30
+  books in val and test. Books that share text are not grouped.
+
+## Leakage
+
+Text shared between different books is not treated as leakage for this project,
+so it is reported and not constrained. Shingle matching on spans of 40+ characters:
+12 of 138 val spans (8.7%) and 21 of 152 test spans (13.8%) also appear verbatim
+in a train book; the test leaks are concentrated in a few books (I52248444 has 6).
+Exact-title matches that include short spans are 8.7% (val) and 15.1% (test) and
+are mostly stock headings: `དཀར་ཆག` (table of contents) and publisher's notes such
+as `དཔེ་སྐྲུན་སྨོན་ཚིག` and `དཔེ་སྐྲུན་གསལ་བཤད`. 439 book pairs share at least one long
+span, and 185 of them sit in different splits.
 
 ## Known limitations
 
 - Most books have very few Chapter spans (216 of 393 have one or two before
   exclusions), and some may be under-annotated. Not audited.
 - About 1.1% of new-batch Chapter spans overlap a BookTitle span. Not resolved.
-- The test split has only 273 spans in 37 books, so scores will be noisy.
+- The test split has 258 spans in 36 books, so scores will be noisy.
 - The heading-shape check used to find drifted books is a heuristic.
