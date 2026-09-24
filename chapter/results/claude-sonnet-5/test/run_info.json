@@ -1,0 +1,81 @@
+{
+  "model": "claude-sonnet-5",
+  "api": "Message Batches",
+  "prompt": "chapter/docs/prompts/gemini_chapter_anchors.md",
+  "batch_id": "msgbatch_01X7wAkNRUCgTgch9suojG1v",
+  "created": "2026-09-25 02:39:43",
+  "n_requests": 536,
+  "n_books": 36,
+  "books": [
+    "P000115",
+    "ICDC84458",
+    "P000275",
+    "P000067",
+    "I99DF06AA",
+    "P000245",
+    "I3F4A91F5",
+    "P000079",
+    "I45222122",
+    "IC6F06BCD",
+    "I9B6A4525",
+    "IE5895799",
+    "I0FCFA88F",
+    "I52248444",
+    "P000109",
+    "I5F5D9F5A",
+    "P000013",
+    "P000023",
+    "IC05A6BE0",
+    "P000110",
+    "I7989272E",
+    "IAAADCAA0",
+    "I4DFE9067",
+    "P000027",
+    "P000056",
+    "P000118",
+    "P000172",
+    "P000223",
+    "I575514A8",
+    "P000138",
+    "I62D7430C",
+    "IE9C4806D",
+    "P000134",
+    "I319DAFF7",
+    "I9AEEF96A",
+    "I9D9C7AC9"
+  ],
+  "tokens": {
+    "input_uncached": 10808402,
+    "output": 112857,
+    "cache_read": 2762740,
+    "cache_write": 5164
+  },
+  "cost_usd_batch_approx": 11.66,
+  "test_scores_shared_scorer": {
+    "all 36 books": {
+      "f1": 0.3016157989228007,
+      "precision": 0.19626168224299065,
+      "recall": 0.6511627906976745,
+      "tp": 168,
+      "n_pred": 856,
+      "n_gold": 258
+    },
+    "old-batch": {
+      "f1": 0.33140655105973027,
+      "precision": 0.21882951653944022,
+      "recall": 0.6825396825396826,
+      "tp": 86,
+      "n_pred": 393,
+      "n_gold": 126
+    },
+    "new-batch": {
+      "f1": 0.2756302521008403,
+      "precision": 0.1771058315334773,
+      "recall": 0.6212121212121212,
+      "tp": 82,
+      "n_pred": 463,
+      "n_gold": 132
+    },
+    "median_book_f1": 0.38749999999999996
+  }
+}
