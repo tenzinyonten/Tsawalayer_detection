@@ -188,7 +188,7 @@ def dump_spans(path, meta, kept_pos, gold_all, preds):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
-    ap.add_argument("--dataset", default="tsawa/data/processed/tsawa_dataset_v2")
+    ap.add_argument("--dataset", default="Yontenn/formatting-tsawa-v6")
     ap.add_argument("--split", default="validation")
     ap.add_argument("--break-penalty", type=float, default=2.0,
                     help="team default is 2.0")

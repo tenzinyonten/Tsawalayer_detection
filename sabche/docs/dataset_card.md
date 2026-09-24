@@ -1,3 +1,29 @@
+---
+pretty_name: Formatting Sabche
+language:
+- bo
+task_categories:
+- token-classification
+tags:
+- tibetan
+- sabche
+- bio
+- mmbert
+- openpecha
+size_categories:
+- 10K<n<100K
+license: other
+configs:
+- config_name: default
+  data_files:
+  - split: train
+    path: data/train-*
+  - split: validation
+    path: data/validation-*
+  - split: test
+    path: data/test-*
+---
+
 # Sabche (ས་བཅད་, outline heading) dataset — mmBERT BIO
 
 Binary token classification for the Sabche layer, built with the tsawa

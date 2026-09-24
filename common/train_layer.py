@@ -46,8 +46,7 @@ Usage
 -----
     python common/train_layer.py --scheme multi --dataset ds_v4 \\
         --weight-scheme inv --skip-test --output-dir runs/v4_multi
-    python common/train_layer.py --label-name SABCHE --scheme bio \\
-        --dataset sabche/sabche/data/processed_dataset_v2 --output-dir runs/sabche
+    python common/train_layer.py --label-name SABCHE --scheme bio --output-dir runs/sabche
 """
 
 from __future__ import annotations
@@ -70,6 +69,8 @@ from transformers import (
 
 NEG = -1.0e9
 
+DEFAULT_DATASETS = {"TSAWA": "Yontenn/formatting-tsawa-v6",
+                    "SABCHE": "Yontenn/formatting-sabche-v1"}
 PRIMARY = "TSAWA"     # the layer being trained; set by configure_label()
 SCHEMES: dict = {}
 ENTITIES: dict = {}    # which label ids open / continue each entity type, per scheme
@@ -303,7 +304,8 @@ def main():
                     help="the layer's entity name, e.g. TSAWA or SABCHE; sets the "
                          "label names and the default --dataset / --output-dir")
     ap.add_argument("--dataset", default=None,
-                    help="default: <layer>/data/processed/<layer>_dataset_v2")
+                    help="local dir or Hugging Face repo; default: the layer's dataset on the Hub "
+                         "(see DEFAULT_DATASETS; needs HF_TOKEN if private)")
     ap.add_argument("--base-model", default="jhu-clsp/mmBERT-base")
     ap.add_argument("--output-dir", default=None, help="default: runs/<layer>")
     ap.add_argument("--scheme", default="bio", choices=list(SCHEMES))
@@ -349,7 +351,7 @@ def main():
 
     configure_label(args.label_name)
     layer = PRIMARY.lower()
-    args.dataset = args.dataset or f"{layer}/data/processed/{layer}_dataset_v2"
+    args.dataset = args.dataset or DEFAULT_DATASETS.get(PRIMARY, f"{layer}/data/processed/{layer}_dataset")
     args.output_dir = args.output_dir or f"runs/{layer}"
     scheme = args.scheme
     names = SCHEMES[scheme]

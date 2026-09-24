@@ -16,9 +16,21 @@ yigchung, and quote (validation F1 ≈ 0.02–0.04), likely because a shared
 loss drowned rare/hard labels.
 
 **Current stage:** Phases 1–3 are implemented (fetch, audit, BIO dataset).
-Data-rights: **combined old+new batches may be used for training.** Hub copy:
-[`Yontenn/formatting-tsawa-v1`](https://huggingface.co/datasets/Yontenn/formatting-tsawa-v1).
+Data-rights: **combined old+new batches may be used for training.** Datasets and
+models are on Hugging Face (see below).
 **No training loop** yet.
+
+## Hugging Face
+
+| Layer | Dataset | Model |
+|---|---|---|
+| Tsawa | [Yontenn/formatting-tsawa-v6](https://huggingface.co/datasets/Yontenn/formatting-tsawa-v6) | [Yontenn/mmbert-tsawa-v6-nofeat](https://huggingface.co/Yontenn/mmbert-tsawa-v6-nofeat) |
+| Sabche | [Yontenn/formatting-sabche-v1](https://huggingface.co/datasets/Yontenn/formatting-sabche-v1) | [Yontenn/mmbert-sabche-v1](https://huggingface.co/Yontenn/mmbert-sabche-v1) |
+
+If a page returns 404, the repo is private and needs access from its owner. Per-layer copies
+with more detail are in `tsawa/docs/huggingface.md` and `sabche/docs/huggingface.md`.
+The Sabche zero-shot evaluation (Gemini and Claude vs mmBERT) is also in the public repo
+[`tenzinyonten/sabche-zeroshot-eval`](https://github.com/tenzinyonten/sabche-zeroshot-eval).
 
 ## OpenPecha `.opf` layout (what we fetch)
 
