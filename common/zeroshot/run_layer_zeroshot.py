@@ -42,6 +42,14 @@ QUOTE_SPANS = ROOT / "tsawa/data/processed/quotation_spans_snapped.csv"
 SABCHE_SPANS = ROOT / "sabche/data/processed/sabche_spans_clean.csv"
 SABCHE_SPLIT = ROOT / "sabche/data/processed/sabche_split_frozen.csv"
 SABCHE_PROMPT = ROOT / "sabche/docs/prompts/gemini_sabche_anchors.md"
+CHAPTER_SPANS = ROOT / "chapter/data/processed/chapter_spans_clean.csv"
+CHAPTER_SPLIT = ROOT / "chapter/data/processed/chapter_split_frozen.csv"
+CHAPTER_PROMPT = ROOT / "chapter/docs/prompts/gemini_chapter_anchors.md"
+# per layer: spans csv, split csv, default prompt, label the model returns
+LAYER_FILES = {
+    "sabche": (SABCHE_SPANS, SABCHE_SPLIT, SABCHE_PROMPT, "SABCHE"),
+    "chapter": (CHAPTER_SPANS, CHAPTER_SPLIT, CHAPTER_PROMPT, "CHAPTER"),
+}
 PROMPT = ROOT / "tsawa/docs/prompts/gemini_tsawa_anchors.md"
 MAX_SPAN = 2000  # head-to-tail ceiling for the locator
 
@@ -75,8 +83,8 @@ def load_books(ids: list[str]) -> dict[str, str]:
 def load_gold(ids: list[str], layer: str = "tsawa") -> dict[str, list[tuple[int, int]]]:
     """Gold spans as INCLUSIVE (start, end); the CSVs store end-exclusive."""
     gold: dict[str, list[tuple[int, int]]] = {b: [] for b in ids}
-    if layer == "sabche":
-        for r in csv.DictReader(open(SABCHE_SPANS, encoding="utf-8")):
+    if layer in ("sabche", "chapter"):
+        for r in csv.DictReader(open(LAYER_FILES[layer][0], encoding="utf-8")):
             p = r["pecha_id"]
             if p in gold and r["dropped"] != "True":
                 gold[p].append((int(r["start"]), int(r["end"]) - 1))
@@ -101,7 +109,7 @@ def load_gold(ids: list[str], layer: str = "tsawa") -> dict[str, list[tuple[int,
 
 
 def split_of(layer: str = "tsawa") -> dict[str, str]:
-    path = SABCHE_SPLIT if layer == "sabche" else SPLIT
+    path = LAYER_FILES[layer][1] if layer in LAYER_FILES else SPLIT
     body = (l for l in open(path, encoding="utf-8") if not l.startswith("#"))
     return {r["pecha_id"]: r["split"] for r in csv.DictReader(body)}
 
@@ -294,7 +302,7 @@ def main():
     ap.add_argument("--prompt", default=str(PROMPT))
     ap.add_argument("--model", default="gemini-3.1-flash-lite")
     ap.add_argument("--provider", choices=["gemini", "anthropic"], default="gemini")
-    ap.add_argument("--layer", choices=["tsawa", "quotation", "sabche"], default="tsawa",
+    ap.add_argument("--layer", choices=["tsawa", "quotation", "sabche", "chapter"], default="tsawa",
                     help="which gold layer to score against; also the label "
                          "the model is expected to return")
     ap.add_argument("--window", type=int, default=16000)
@@ -314,8 +322,8 @@ def main():
                     help="score the cached replies, make no API calls")
     args = ap.parse_args()
 
-    if args.layer == "sabche" and args.prompt == str(PROMPT):
-        args.prompt = str(SABCHE_PROMPT)      # layer's own default prompt
+    if args.layer in LAYER_FILES and args.prompt == str(PROMPT):
+        args.prompt = str(LAYER_FILES[args.layer][2])      # layer's own default prompt
     prompt = load_prompt(Path(args.prompt), raw=args.raw_prompt)
     texts = load_books(args.books)
     gold = load_gold(args.books, args.layer)
@@ -376,8 +384,8 @@ def main():
             usage_tot["prompt"] += rec.get("prompt_tokens") or 0
             usage_tot["output"] += rec.get("output_tokens") or 0
             local = locate_window(c["text"], rec.get("raw", ""),
-                                  {"quotation": "QUOTATION",
-                                   "sabche": "SABCHE"}.get(args.layer, "TSAWA"))
+                                  {"quotation": "QUOTATION", "sabche": "SABCHE",
+                                   "chapter": "CHAPTER"}.get(args.layer, "TSAWA"))
             pred.extend((rec["start"] + s, rec["start"] + e) for s, e in local)
 
         pred = dedupe(pred)

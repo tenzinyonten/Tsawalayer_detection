@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude_batch.py - run Claude Sonnet 5 on the sabche test windows through the
+claude_batch.py - run Claude Sonnet 5 on the test windows of a layer (--layer sabche or chapter) through the
 Message Batches API (half price, asynchronous), reusing the exact windows, prompt
 and per-window cache format of common/zeroshot/run_layer_zeroshot.py, so the
 existing scorer works unchanged.
@@ -9,19 +9,19 @@ Nothing is sent unless `create` is run with --yes. Without --yes it builds the
 requests and reports what it would send.
 
     # 1. offline: how many windows, split into groups, estimated cost
-    python common/zeroshot/claude_batch.py plan --groups 3
+    python common/zeroshot/claude_batch.py --layer chapter plan --groups 3
 
     # 2. dry run of one group (still offline), then submit it
-    python common/zeroshot/claude_batch.py create --group g1 --books P000083 ...
-    python common/zeroshot/claude_batch.py create --group g1 --books P000083 ... --yes
+    python common/zeroshot/claude_batch.py --layer chapter create --group g1 --books P000083 ...
+    python common/zeroshot/claude_batch.py --layer chapter create --group g1 --books P000083 ... --yes
 
     # 3. wait, then download one file per window
-    python common/zeroshot/claude_batch.py poll  --group g1
-    python common/zeroshot/claude_batch.py fetch --group g1
+    python common/zeroshot/claude_batch.py --layer chapter poll  --group g1
+    python common/zeroshot/claude_batch.py --layer chapter fetch --group g1
 
     # 4. score (no API key needed)
-    python common/zeroshot/run_layer_zeroshot.py --layer sabche --books ... \\
-        --out scratch/sabche/claude/test --locate-only
+    python common/zeroshot/run_layer_zeroshot.py --layer chapter --books ... \\
+        --out scratch/chapter/claude/test --locate-only
 
 The batch id is written to disk the moment the batch is created, a group cannot be
 submitted twice, and windows that already have a saved reply are never re-sent.
@@ -39,6 +39,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "common/zeroshot/run_layer_zeroshot.py"
+LAYER = "sabche"
 OUT = ROOT / "scratch/sabche/claude/test"
 STATE = ROOT / "scratch/sabche/claude/batches.json"
 MODEL = "claude-sonnet-5"
@@ -50,6 +51,14 @@ EST_CENTRAL, EST_HIGH = 0.042, 0.053
 CUSTOM_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+def configure(layer: str) -> None:
+    """Point the output folder and the batch state file at this layer."""
+    global LAYER, OUT, STATE
+    LAYER = layer
+    OUT = ROOT / f"scratch/{layer}/claude/test"
+    STATE = ROOT / f"scratch/{layer}/claude/batches.json"
+
+
 def load_runner():
     spec = importlib.util.spec_from_file_location("runner", RUNNER)
     m = importlib.util.module_from_spec(spec)
@@ -59,7 +68,7 @@ def load_runner():
 
 
 def test_books(m) -> list[str]:
-    return sorted(b for b, s in m.split_of("sabche").items() if s == "test")
+    return sorted(b for b, s in m.split_of(LAYER).items() if s == "test")
 
 
 def windows_for(m, book: str, text: str):
@@ -71,7 +80,7 @@ def pending(book: str, chunks) -> list[int]:
 
 
 def build_requests(m, books: list[str]):
-    prompt = m.load_prompt(Path(m.SABCHE_PROMPT))
+    prompt = m.load_prompt(Path(m.LAYER_FILES[LAYER][2]))
     texts = m.load_books(books)
     reqs, per_book = [], {}
     for b in books:
@@ -215,6 +224,7 @@ def cmd_fetch(args):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--layer", choices=["sabche", "chapter"], default="sabche")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("plan")
     p.add_argument("--groups", type=int, default=3)
@@ -229,6 +239,7 @@ def main():
         p.add_argument("--group", required=True)
         p.set_defaults(fn=fn)
     args = ap.parse_args()
+    configure(args.layer)
     args.fn(args)
 
 
