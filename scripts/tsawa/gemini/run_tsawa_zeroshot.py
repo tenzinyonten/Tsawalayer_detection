@@ -39,6 +39,9 @@ SPANS = ROOT / "data/processed/tsawa/tsawa_spans_merged.csv"
 SPLIT = ROOT / "data/processed/tsawa/split_v3_frozen.csv"
 IGNORE = ROOT / "data/processed/tsawa/v6_ignore_spans.csv"
 QUOTE_SPANS = ROOT / "data/processed/tsawa/quotation_spans_snapped.csv"
+SABCHE_SPANS = ROOT / "data/processed/sabche/sabche_spans_clean.csv"
+SABCHE_SPLIT = ROOT / "data/processed/sabche/sabche_split_v2_frozen.csv"
+SABCHE_PROMPT = ROOT / "docs/prompts/sabche/gemini_sabche_anchors_v1.md"
 PROMPT = ROOT / "docs/prompts/tsawa/gemini_tsawa_anchors_v1.md"
 MAX_SPAN = 2000  # head-to-tail ceiling for the locator
 
@@ -72,6 +75,12 @@ def load_books(ids: list[str]) -> dict[str, str]:
 def load_gold(ids: list[str], layer: str = "tsawa") -> dict[str, list[tuple[int, int]]]:
     """Gold spans as INCLUSIVE (start, end); the CSVs store end-exclusive."""
     gold: dict[str, list[tuple[int, int]]] = {b: [] for b in ids}
+    if layer == "sabche":
+        for r in csv.DictReader(open(SABCHE_SPANS, encoding="utf-8")):
+            p = r["pecha_id"]
+            if p in gold and r["dropped"] != "True":
+                gold[p].append((int(r["start"]), int(r["end"]) - 1))
+        return {k: sorted(v) for k, v in gold.items()}
     if layer == "quotation":
         for r in csv.DictReader(open(QUOTE_SPANS, encoding="utf-8")):
             p = r["pecha_id"]
@@ -91,8 +100,9 @@ def load_gold(ids: list[str], layer: str = "tsawa") -> dict[str, list[tuple[int,
     return {k: sorted(v) for k, v in gold.items()}
 
 
-def split_of() -> dict[str, str]:
-    body = (l for l in open(SPLIT, encoding="utf-8") if not l.startswith("#"))
+def split_of(layer: str = "tsawa") -> dict[str, str]:
+    path = SABCHE_SPLIT if layer == "sabche" else SPLIT
+    body = (l for l in open(path, encoding="utf-8") if not l.startswith("#"))
     return {r["pecha_id"]: r["split"] for r in csv.DictReader(body)}
 
 
@@ -167,23 +177,39 @@ SPAN_SCHEMA = {
 def call_claude(client, model: str, prompt: str, chunk: str, tries: int = 5):
     """Sonnet 5 rejects temperature/top_p and takes adaptive thinking."""
     import anthropic
+    # The prompt is identical for every window, so cache it as a prefix: the
+    # window text goes in a second block after the breakpoint. Same tokens are
+    # sent either way - this only changes billing ($0.20/MTok read vs $2.00).
+    content = [
+        {"type": "text", "text": prompt,
+         "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"type": "text", "text": chunk},
+    ]
     for attempt in range(tries):
         try:
-            r = client.messages.create(
+            with client.messages.stream(
                 model=model, max_tokens=64000,
                 thinking={"type": "adaptive"},
                 output_config={"effort": "low",
                                "format": {"type": "json_schema", "schema": SPAN_SCHEMA}},
-                messages=[{"role": "user", "content": prompt + chunk}],
-            )
+                messages=[{"role": "user", "content": content}],
+            ) as stream:                      # 64K max_tokens requires streaming
+                r = stream.get_final_message()
             text = "".join(b.text for b in r.content if b.type == "text")
             return text, {"prompt_tokens": r.usage.input_tokens,
                           "output_tokens": r.usage.output_tokens,
+                          "cache_write": getattr(r.usage, "cache_creation_input_tokens", 0),
+                          "cache_read": getattr(r.usage, "cache_read_input_tokens", 0),
                           "finish": str(r.stop_reason)}
         except anthropic.RateLimitError as exc:
             wait = int(getattr(exc.response, "headers", {}).get("retry-after", 30))
             print(f"    rate limited, waiting {wait}s", flush=True)
             time.sleep(wait)
+        except anthropic.BadRequestError as exc:
+            if "ttl" in str(exc).lower() and content[0]["cache_control"].get("ttl"):
+                content[0]["cache_control"] = {"type": "ephemeral"}   # 5-min default
+                continue
+            raise
         except anthropic.APIStatusError as exc:
             if exc.status_code < 500 or attempt == tries - 1:
                 raise
@@ -268,7 +294,7 @@ def main():
     ap.add_argument("--prompt", default=str(PROMPT))
     ap.add_argument("--model", default="gemini-3.1-flash-lite")
     ap.add_argument("--provider", choices=["gemini", "anthropic"], default="gemini")
-    ap.add_argument("--layer", choices=["tsawa", "quotation"], default="tsawa",
+    ap.add_argument("--layer", choices=["tsawa", "quotation", "sabche"], default="tsawa",
                     help="which gold layer to score against; also the label "
                          "the model is expected to return")
     ap.add_argument("--window", type=int, default=16000)
@@ -288,10 +314,12 @@ def main():
                     help="score the cached replies, make no API calls")
     args = ap.parse_args()
 
+    if args.layer == "sabche" and args.prompt == str(PROMPT):
+        args.prompt = str(SABCHE_PROMPT)      # layer's own default prompt
     prompt = load_prompt(Path(args.prompt), raw=args.raw_prompt)
     texts = load_books(args.books)
     gold = load_gold(args.books, args.layer)
-    splits = split_of()
+    splits = split_of(args.layer)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -348,7 +376,8 @@ def main():
             usage_tot["prompt"] += rec.get("prompt_tokens") or 0
             usage_tot["output"] += rec.get("output_tokens") or 0
             local = locate_window(c["text"], rec.get("raw", ""),
-                                  "QUOTATION" if args.layer == "quotation" else "TSAWA")
+                                  {"quotation": "QUOTATION",
+                                   "sabche": "SABCHE"}.get(args.layer, "TSAWA"))
             pred.extend((rec["start"] + s, rec["start"] + e) for s, e in local)
 
         pred = dedupe(pred)

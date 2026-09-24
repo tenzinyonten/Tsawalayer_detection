@@ -1,38 +1,49 @@
 #!/usr/bin/env python3
 """
-train_tsawa.py (v3) — fine-tune mmBERT-base as a binary Tsawa (root-text) tagger.
+train_tsawa.py (v5) — tsawa detection with quotation as an auxiliary class.
 
-Two tagging schemes, selectable at load time — no dataset rebuild needed:
+WHY A SECOND CLASS. The model's largest error is predicting spans that overlap
+no gold tsawa (53.7% of predictions). Many of those are probably quotations:
+citations from other works carrying the same framing particles and the same
+verse structure as root text. Until now there was no label for that category,
+so the model had no way to learn to reject it.
 
-  BIO (default)  O=0, B-TSAWA=1, I-TSAWA=2
-  IO  (--io)     O=0, TSAWA=1     (B collapsed into I)
+Measured over 60 books holding both layers:
 
-Why IO is worth trying: B is 0.062% of tokens, and v1 error analysis showed the
-model emitting spurious B tags inside spans it had already found correctly
-(one gold span predicted as 3-80 pieces). IO removes the B class entirely and
-recovers span starts from 0->1 transitions, so fragmentation becomes
-structurally impossible rather than something to be suppressed with loss
-weights.
+                            tsawa    quotation
+    median length (chars)      32           73
+    isometric clauses %      73.0         89.5
+    followed by a closer %   34.9         57.5
+    preceded by attribution%  8.0         34.6
 
-v1 baseline (v1 split, BIO, sqrt_inv weights, no warmup):
-  test soft_f1_tol1 0.177 (training-time, bf16) / 0.091 (offline, fp32)
-  52% of gold spans missed entirely; 0.000 recall on spans under 10 tokens;
-  23.6% of found spans fragmented; over-prediction 1.8x-3.1x
-These are NOT comparable to v2 runs — different test split.
+Separable on surface form, so an explicit label should be learnable.
 
-The test split is FROZEN. Use --skip-test while tuning.
+WHAT IS REPORTED. Quotation is auxiliary. The selection metric and the headline
+number are TSAWA IoU@0.5 only; quotation metrics are logged for diagnosis and
+should be ignored on the test split, whose quotation density (3.2%) is less
+than half of train's (7.0%) — the frozen split was stratified on tsawa, not
+quotation.
 
-Examples
---------
-    # 1. baseline on the v2 split: unweighted BIO
-    python train_tsawa.py --weight-scheme none --skip-test \
-        --output-dir /workspace/runs/v2_bio_none
+Schemes, all converted from the stored labels at load time:
 
-    # 2. the real intervention: IO tagging
-    python train_tsawa.py --io --weight-scheme none --skip-test \
-        --output-dir /workspace/runs/v2_io_none
+    bio    O, B-TSAWA, I-TSAWA                                    (3)
+    io     O, TSAWA                                               (2)
+    bioe   O, B-TSAWA, I-TSAWA, E-TSAWA                           (4)
+    multi  O, B-TSAWA, I-TSAWA, B-QUOTE, I-QUOTE                  (5)
 
-Set REPORT_TO=wandb and WANDB_PROJECT=tsawa for wandb logging.
+`multi` requires the v4 dataset, which already carries the 5-label scheme.
+
+Reference points (validation, v2 split, Viterbi):
+    v2 BIO unweighted   0.309
+    v2 BIO inv-freq     0.323   <- best so far
+    v2 BIOE inv-freq    0.320
+    joint model, tsawa  0.395
+    quotation model     0.853
+
+Usage
+-----
+    python train_tsawa.py --scheme multi --dataset ds_v4 \\
+        --weight-scheme inv --skip-test --output-dir runs/v4_multi
 """
 
 from __future__ import annotations
@@ -41,6 +52,7 @@ import argparse
 import inspect
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -48,231 +60,209 @@ import torch
 import torch.nn as nn
 from datasets import load_dataset, load_from_disk
 from transformers import (
-    AutoConfig,
-    AutoModelForTokenClassification,
-    EarlyStoppingCallback,
-    Trainer,
-    TrainingArguments,
-    set_seed,
+    AutoConfig, AutoModelForTokenClassification, EarlyStoppingCallback,
+    Trainer, TrainingArguments, set_seed,
 )
 
-O, B, I = 0, 1, 2
-BIO_NAMES = ["O", "B-TSAWA", "I-TSAWA"]
-IO_NAMES = ["O", "TSAWA"]
+NEG = -1.0e9
 
-# Length buckets in TOKENS, for the per-bucket recall breakdown. The first two
-# are where v1 scored exactly zero.
-BUCKETS = [(1, 5), (6, 10), (11, 20), (21, 50), (51, 100), (101, 300), (301, 10**9)]
+SCHEMES = {
+    "bio":   ["O", "B-TSAWA", "I-TSAWA"],
+    "io":    ["O", "TSAWA"],
+    "bioe":  ["O", "B-TSAWA", "I-TSAWA", "E-TSAWA"],
+    "multi": ["O", "B-TSAWA", "I-TSAWA", "B-QUOTE", "I-QUOTE"],
+}
+# which label ids open / continue each entity type, per scheme
+ENTITIES = {
+    "bio":   {"TSAWA": (1, 2, None)},
+    "io":    {"TSAWA": (1, 1, None)},
+    "bioe":  {"TSAWA": (1, 2, 3)},
+    "multi": {"TSAWA": (1, 2, None), "QUOTE": (3, 4, None)},
+}
 
 
 # ---------------------------------------------------------------------------
-# label handling
+# label conversion
 # ---------------------------------------------------------------------------
 
-def to_io(labels: np.ndarray) -> np.ndarray:
-    """Collapse BIO -> IO: B(1) and I(2) both become 1. -100 padding preserved."""
-    out = labels.copy()
-    out[out == I] = 1
+def convert_row(labels, scheme: str, source_is_multi: bool):
+    """Stored labels -> the scheme's label ids."""
+    if scheme == "multi":
+        if not source_is_multi:
+            raise SystemExit("--scheme multi needs the 5-label v4 dataset")
+        return labels
+    # collapse a 5-label source down to tsawa-only
+    if source_is_multi:
+        labels = [0 if x in (3, 4) else x for x in labels]
+    if scheme == "bio":
+        return labels
+    if scheme == "io":
+        return [1 if x == 2 else x for x in labels]
+    out = list(labels)  # bioe
+    for i in range(len(out)):
+        if out[i] in (1, 2):
+            nxt = out[i + 1] if i + 1 < len(out) else -100
+            if nxt != 2:
+                out[i] = 3
     return out
 
 
-def count_labels(ds, n_labels: int, io: bool) -> np.ndarray:
-    counts = np.zeros(n_labels, dtype=np.int64)
-    for batch in ds.with_format("numpy").iter(batch_size=64):
-        lab = batch["labels"].reshape(-1)
-        lab = lab[lab != -100]
-        if io:
-            lab = to_io(lab)
-        counts += np.bincount(lab, minlength=n_labels)
-    return counts
-
-
-def compute_weights(counts: np.ndarray, scheme: str, cap: float,
-                    manual: str | None, io: bool):
-    n = len(counts)
-    n_o = float(counts[O])
-
-    if scheme == "none":
-        w = np.ones(n, dtype=np.float64)
-    elif scheme == "legacy":
-        if io:
-            raise SystemExit("--weight-scheme legacy is BIO-only (it sets a B weight)")
-        w = np.array([0.07, 5.0, 5.0], dtype=np.float64)
-        cap = 0.0
-    elif scheme in ("inv", "sqrt_inv"):
-        ratios = np.array([1.0] + [n_o / counts[c] for c in range(1, n)])
-        w = np.sqrt(ratios) if scheme == "sqrt_inv" else ratios
-        w[O] = 1.0
-    elif scheme == "manual":
-        if not manual:
-            raise SystemExit("--weight-scheme manual requires --manual-weights")
-        w = np.array([float(x) for x in manual.split(",")], dtype=np.float64)
-        if w.shape != (n,):
-            raise SystemExit(f"--manual-weights needs exactly {n} values for this scheme")
-    else:
-        raise SystemExit(f"unknown weight scheme: {scheme}")
-
-    raw = w.copy()
-    if cap and cap > 0:
-        w = np.minimum(w, cap)
-    return w, raw
-
-
 # ---------------------------------------------------------------------------
-# spans
+# Viterbi
 # ---------------------------------------------------------------------------
 
-def extract_spans_bio(seq: np.ndarray):
-    spans, start = [], None
-    for i, lab in enumerate(seq):
-        if lab == B:
+def transition_matrix(scheme: str, break_penalty: float) -> np.ndarray:
+    labels = SCHEMES[scheme]
+    n = len(labels)
+    m = np.zeros((n, n))
+    if scheme == "io":
+        return m
+    ent = ENTITIES[scheme]
+    # a continuation label may only follow its own begin or continuation
+    for j, nxt in enumerate(labels):
+        for tag, (b, i, e) in ent.items():
+            if j == i and i != b:
+                for p in range(n):
+                    if p not in (b, i):
+                        m[p, j] = NEG
+            if e is not None and j == e:
+                for p in range(n):
+                    if p not in (b, i):
+                        m[p, j] = NEG
+    # leaving a span costs the penalty
+    for tag, (b, i, e) in ent.items():
+        closers = {i} if e is None else {i, e}
+        for p in (b, i):
+            for q in range(n):
+                if q not in closers:
+                    m[p, q] -= break_penalty
+    return m
+
+
+def viterbi(logits: np.ndarray, scheme: str, break_penalty: float) -> np.ndarray:
+    if scheme == "io":
+        return logits.argmax(-1)
+    T, C = logits.shape
+    trans = transition_matrix(scheme, break_penalty)
+    dp = np.full((T, C), NEG)
+    bp = np.zeros((T, C), dtype=np.int64)
+    dp[0] = logits[0]
+    for tag, (b, i, e) in ENTITIES[scheme].items():
+        if i != b:
+            dp[0, i] = NEG          # cannot open mid-span
+        if e is not None:
+            dp[0, e] = NEG
+    for t in range(1, T):
+        s = dp[t - 1][:, None] + trans
+        bp[t] = s.argmax(0)
+        dp[t] = s.max(0) + logits[t]
+    path = np.zeros(T, dtype=np.int64)
+    path[-1] = int(dp[-1].argmax())
+    for t in range(T - 1, 0, -1):
+        path[t - 1] = bp[t, path[t]]
+    return path
+
+
+def spans_of(seq, scheme: str, tag: str):
+    """Inclusive (start, end) spans of one entity type."""
+    b, i, e = ENTITIES[scheme][tag]
+    out, start = [], None
+    for k, v in enumerate(seq):
+        if v == b and b != i:
             if start is not None:
-                spans.append((start, i))
-            start = i
-        elif lab == I:
+                out.append((start, k - 1))
+            start = k
+        elif v == b and b == i:          # io
             if start is None:
-                start = i
+                start = k
+        elif v == i:
+            if start is None:
+                start = k
+        elif e is not None and v == e:
+            if start is None:
+                start = k
+            out.append((start, k)); start = None
         else:
             if start is not None:
-                spans.append((start, i))
-                start = None
+                out.append((start, k - 1)); start = None
     if start is not None:
-        spans.append((start, len(seq)))
-    return spans
+        out.append((start, len(seq) - 1))
+    return out
 
 
-def extract_spans_io(seq: np.ndarray):
-    """Contiguous runs of 1. Starts come from 0->1 transitions."""
-    spans, start = [], None
-    for i, lab in enumerate(seq):
-        if lab == 1 and start is None:
-            start = i
-        elif lab != 1 and start is not None:
-            spans.append((start, i))
-            start = None
-    if start is not None:
-        spans.append((start, len(seq)))
-    return spans
+# ---------------------------------------------------------------------------
+# IoU@0.5 — mirrors src/layer_detection/v2_metrics.py
+# ---------------------------------------------------------------------------
+
+def iou(a, b):
+    lo, hi = max(a[0], b[0]), min(a[1], b[1])
+    if hi < lo:
+        return 0.0
+    inter = hi - lo + 1
+    return inter / ((a[1] - a[0] + 1) + (b[1] - b[0] + 1) - inter)
 
 
-def match(gold, pred, tol: int):
-    """Greedy one-to-one; both boundaries within tol."""
-    remaining = list(pred)
-    tp = 0
-    for g0, g1 in gold:
-        for k, (p0, p1) in enumerate(remaining):
-            if abs(p0 - g0) <= tol and abs(p1 - g1) <= tol:
-                tp += 1
-                remaining.pop(k)
-                break
-    return tp, len(pred) - tp, len(gold) - tp
+def count_matches(gold, pred, thr=0.5):
+    cands = sorted(((iou(g, p), gi, pi)
+                    for pi, p in enumerate(pred)
+                    for gi, g in enumerate(gold)
+                    if iou(g, p) >= thr), reverse=True)
+    ug, up, n = set(), set(), 0
+    for _, gi, pi in cands:
+        if gi in ug or pi in up:
+            continue
+        ug.add(gi); up.add(pi); n += 1
+    return n
 
 
-def prf(tp, fp, fn):
-    p = tp / (tp + fp) if tp + fp else 0.0
-    r = tp / (tp + fn) if tp + fn else 0.0
-    return p, r, (2 * p * r / (p + r) if p + r else 0.0)
-
-
-def bucket_of(n):
-    for b in BUCKETS:
-        if b[0] <= n <= b[1]:
-            return b
-    return BUCKETS[-1]
-
-
-def build_metrics(tol: int, io: bool, names: list[str]):
-    extract = extract_spans_io if io else extract_spans_bio
-    n_labels = len(names)
+def build_metrics(scheme: str, break_penalty: float):
+    tags = list(ENTITIES[scheme])
 
     def compute_metrics(eval_pred):
-        preds = np.asarray(eval_pred[0])
+        logits = np.asarray(eval_pred[0])
         labels = np.asarray(eval_pred[1])
+        res = {}
+        acc = {t: [0, 0, 0] for t in tags}      # tp, fp, fn
+        acc_argmax = {t: [0, 0, 0] for t in tags}
 
-        TP = FP = FN = 0
-        TP0 = FP0 = FN0 = 0
-        tok_correct = tok_total = 0
-        cls_tp = np.zeros(n_labels)
-        cls_fp = np.zeros(n_labels)
-        cls_fn = np.zeros(n_labels)
+        for lg, lab in zip(logits, labels):
+            m = lab != -100
+            dec = viterbi(lg[m], scheme, break_penalty)
+            arg = lg[m].argmax(-1)
+            for t in tags:
+                g = spans_of(lab[m], scheme, t)
+                for seq, store in ((dec, acc), (arg, acc_argmax)):
+                    p = spans_of(seq, scheme, t)
+                    tp = count_matches(g, p)
+                    store[t][0] += tp
+                    store[t][1] += len(p) - tp
+                    store[t][2] += len(g) - tp
 
-        orphan_preds = 0
-        frag_gold = 0
-        missed_gold = 0
-        bucket_gold = {b: 0 for b in BUCKETS}
-        bucket_hit = {b: 0 for b in BUCKETS}
+        def prf(tp, fp, fn):
+            pr = tp / (tp + fp) if tp + fp else 0.0
+            rc = tp / (tp + fn) if tp + fn else 0.0
+            return pr, rc, (2 * pr * rc / (pr + rc) if pr + rc else 0.0)
 
-        for p_row, l_row in zip(preds, labels):
-            m = l_row != -100
-            p, l = p_row[m], l_row[m]
-            tok_correct += int((p == l).sum())
-            tok_total += int(m.sum())
-            for c in range(n_labels):
-                cls_tp[c] += int(((p == c) & (l == c)).sum())
-                cls_fp[c] += int(((p == c) & (l != c)).sum())
-                cls_fn[c] += int(((p != c) & (l == c)).sum())
-
-            g, pr = extract(l), extract(p)
-            tp, fp, fn = match(g, pr, tol)
-            TP += tp; FP += fp; FN += fn
-            tp0, fp0, fn0 = match(g, pr, 0)
-            TP0 += tp0; FP0 += fp0; FN0 += fn0
-
-            # structural diagnostics
-            for gs in g:
-                hits = [ps for ps in pr
-                        if min(gs[1], ps[1]) - max(gs[0], ps[0]) > 0]
-                if not hits:
-                    missed_gold += 1
-                elif len(hits) >= 2:
-                    frag_gold += 1
-                bk = bucket_of(gs[1] - gs[0])
-                bucket_gold[bk] += 1
-                if any(abs(ps[0] - gs[0]) <= tol and abs(ps[1] - gs[1]) <= tol
-                       for ps in pr):
-                    bucket_hit[bk] += 1
-            for ps in pr:
-                if not any(min(gs[1], ps[1]) - max(gs[0], ps[0]) > 0 for gs in g):
-                    orphan_preds += 1
-
-        prec, rec, f1 = prf(TP, FP, FN)
-        _, _, f1_exact = prf(TP0, FP0, FN0)
-        n_gold, n_pred = TP + FN, TP + FP
-
-        out = {
-            f"soft_f1_tol{tol}": f1,
-            f"soft_precision_tol{tol}": prec,
-            f"soft_recall_tol{tol}": rec,
-            "exact_span_f1": f1_exact,
-            "token_accuracy": tok_correct / tok_total if tok_total else 0.0,
-            "gold_spans": int(n_gold),
-            "pred_spans": int(n_pred),
-            "over_prediction_ratio": n_pred / n_gold if n_gold else 0.0,
-            # v1 reference values, for orientation:
-            "missed_gold_pct": 100 * missed_gold / n_gold if n_gold else 0.0,   # v1: 52.0
-            "fragmented_gold_pct": 100 * frag_gold / n_gold if n_gold else 0.0, # v1: 23.6
-            "orphan_pred_pct": 100 * orphan_preds / n_pred if n_pred else 0.0,  # v1: 46.7
-        }
-        for c, name in enumerate(names):
-            out[f"f1_{name}"] = prf(cls_tp[c], cls_fp[c], cls_fn[c])[2]
-        for b in BUCKETS:
-            if bucket_gold[b]:
-                tag = f"{b[0]}-{b[1]}" if b[1] < 10**9 else f"{b[0]}plus"
-                out[f"recall_tok_{tag}"] = bucket_hit[b] / bucket_gold[b]
-        return out
+        for t in tags:
+            tp, fp, fn = acc[t]
+            pr, rc, f1 = prf(tp, fp, fn)
+            key = "iou50" if t == "TSAWA" else f"{t.lower()}_iou50"
+            res[f"{key}_f1"] = f1
+            res[f"{key}_precision"] = pr
+            res[f"{key}_recall"] = rc
+            res[f"{key}_n_gold"] = tp + fn
+            res[f"{key}_n_pred"] = tp + fp
+            res[f"{key}_overproposal"] = (tp + fp) / (tp + fn) if tp + fn else 0.0
+            a_tp, a_fp, a_fn = acc_argmax[t]
+            res[f"{key}_argmax_f1"] = prf(a_tp, a_fp, a_fn)[2]
+        return res
     return compute_metrics
-
-
-def preprocess_logits_for_metrics(logits, labels):
-    if isinstance(logits, tuple):
-        logits = logits[0]
-    return logits.argmax(dim=-1)
 
 
 # ---------------------------------------------------------------------------
 
 class WeightedTrainer(Trainer):
-    def __init__(self, class_weights: torch.Tensor, **kw):
+    def __init__(self, class_weights, **kw):
         super().__init__(**kw)
         self.class_weights = class_weights
 
@@ -281,28 +271,23 @@ class WeightedTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.logits
         loss_fct = nn.CrossEntropyLoss(
-            weight=self.class_weights.to(logits.device), ignore_index=-100
-        )
+            weight=self.class_weights.to(device=logits.device, dtype=logits.dtype),
+            ignore_index=-100)
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         inputs["labels"] = labels
         return (loss, outputs) if return_outputs else loss
 
 
-# ---------------------------------------------------------------------------
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset", default="Yontenn/formatting-tsawa-v2")
+    ap.add_argument("--dataset", default="data/processed/tsawa/tsawa_dataset_v2")
     ap.add_argument("--base-model", default="jhu-clsp/mmBERT-base")
-    ap.add_argument("--output-dir", default="/workspace/runs/tsawa")
-
-    ap.add_argument("--io", action="store_true",
-                    help="IO tagging: collapse B into I, 2 labels instead of 3")
-    ap.add_argument("--weight-scheme", default="none",
-                    choices=["none", "sqrt_inv", "inv", "legacy", "manual"])
-    ap.add_argument("--weight-cap", type=float, default=0.0)
+    ap.add_argument("--output-dir", default="runs/tsawa")
+    ap.add_argument("--scheme", default="bio", choices=list(SCHEMES))
+    ap.add_argument("--weight-scheme", default="inv",
+                    choices=["none", "inv", "sqrt_inv", "manual"])
     ap.add_argument("--manual-weights", default=None)
-
+    ap.add_argument("--break-penalty", type=float, default=5.0)
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--epochs", type=float, default=10)
     ap.add_argument("--batch-size", type=int, default=8)
@@ -310,46 +295,65 @@ def main():
     ap.add_argument("--weight-decay", type=float, default=0.01)
     ap.add_argument("--grad-clip", type=float, default=0.3)
     ap.add_argument("--warmup-ratio", type=float, default=0.06)
-    ap.add_argument("--warmup-steps", type=int, default=0,
-                    help="fallback if warmup_ratio is unsupported; 0 = derive from ratio")
     ap.add_argument("--patience", type=int, default=3)
-    ap.add_argument("--tol", type=int, default=1)
+    ap.add_argument(
+        "--evals-per-epoch",
+        type=int,
+        default=1,
+        help="When > 1, evaluate/save every steps_per_epoch // evals_per_epoch "
+        "steps and multiply --patience by this so patience stays in epochs.",
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--run-name", default=None)
-
     ap.add_argument("--no-bf16", action="store_true")
     ap.add_argument("--no-grad-checkpointing", action="store_true")
-    ap.add_argument("--attn", default="auto",
-                    choices=["auto", "flash_attention_2", "sdpa", "eager"])
     ap.add_argument("--resume", action="store_true")
-    ap.add_argument("--skip-test", action="store_true",
-                    help="leave the frozen test split alone while tuning")
+    ap.add_argument("--skip-test", action="store_true")
     ap.add_argument("--smoke-test", action="store_true")
+    ap.add_argument(
+        "--use-features",
+        action="store_true",
+        help="Concatenate mmBERT hidden state with Linear(5,32)+GELU(features).",
+    )
+    ap.add_argument(
+        "--use-crf",
+        action="store_true",
+        help="mmBERT + linear-chain CRF (loss computed inside the model).",
+    )
     args = ap.parse_args()
+    if args.use_crf and args.use_features:
+        raise SystemExit("--use-crf and --use-features are mutually exclusive")
 
-    set_seed(args.seed)
-    out = Path(args.output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-
-    names = IO_NAMES if args.io else BIO_NAMES
+    scheme = args.scheme
+    names = SCHEMES[scheme]
     n_labels = len(names)
-    print(f"tagging scheme: {'IO' if args.io else 'BIO'} ({n_labels} labels)")
+    set_seed(args.seed)
+    out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
+    print(f"scheme: {scheme.upper()} ({n_labels} labels: {', '.join(names)})")
 
-    # ---- data -------------------------------------------------------------
     ds = (load_from_disk(args.dataset) if Path(args.dataset).exists()
           else load_dataset(args.dataset, token=os.environ.get("HF_TOKEN")))
     print({k: len(v) for k, v in ds.items()})
-
     keep = ["input_ids", "attention_mask", "labels"]
+    if args.use_features:
+        if "features" not in ds["train"].column_names:
+            raise SystemExit("--use-features requires a dataset with a 'features' column (v6)")
+        keep.append("features")
     ds = ds.remove_columns([c for c in ds["train"].column_names if c not in keep])
 
-    if args.io:
-        # Collapse at load time; the stored dataset stays BIO.
-        ds = ds.map(
-            lambda b: {"labels": [[1 if x == I else x for x in row]
-                                  for row in b["labels"]]},
-            batched=True, batch_size=64, desc="BIO -> IO",
-        )
+    # detect whether the stored labels already carry quotation
+    probe = np.array(ds["train"][0]["labels"])
+    src_multi = bool((probe > 2).any())
+    for i in range(1, min(50, len(ds["train"]))):
+        if (np.array(ds["train"][i]["labels"]) > 2).any():
+            src_multi = True
+            break
+    print(f"source dataset: {'5-label (tsawa + quotation)' if src_multi else '3-label (tsawa only)'}")
+
+    if scheme != "bio" or src_multi:
+        ds = ds.map(lambda b: {"labels": [convert_row(r, scheme, src_multi)
+                                          for r in b["labels"]]},
+                    batched=True, batch_size=64, desc=f"-> {scheme.upper()}")
     ds.set_format("torch")
 
     train_ds, eval_ds = ds["train"], ds["validation"]
@@ -358,135 +362,148 @@ def main():
         eval_ds = eval_ds.select(range(min(8, len(eval_ds))))
         args.epochs = 1
 
-    # ---- class weights ----------------------------------------------------
-    counts = count_labels(ds["train"], n_labels, io=False)  # already collapsed
+    counts = np.zeros(n_labels, dtype=np.int64)
+    for b in ds["train"].with_format("numpy").iter(batch_size=64):
+        lab = b["labels"].reshape(-1)
+        counts += np.bincount(lab[lab != -100], minlength=n_labels)
     total = counts.sum()
-    print("\ntrain label counts (padding excluded):")
-    for c, name in enumerate(names):
-        print(f"  {name:>8}: {counts[c]:>12,}  ({100*counts[c]/total:6.3f}%)")
-    pos = total - counts[O]
-    print(f"  positive: {100*pos/total:.3f}%")
+    print("\ntrain label counts:")
+    for c, nm in enumerate(names):
+        print(f"  {nm:>9}: {counts[c]:>12,}  ({100*counts[c]/total:6.3f}%)")
 
-    w, raw = compute_weights(counts, args.weight_scheme, args.weight_cap,
-                             args.manual_weights, args.io)
-    print(f"\nweight scheme: {args.weight_scheme}  cap: {args.weight_cap or 'none'}")
-    for c, name in enumerate(names):
-        note = "  <-- CLIPPED" if raw[c] != w[c] else ""
-        print(f"  {name:>8}: raw {raw[c]:>10.3f} -> used {w[c]:>8.3f}{note}")
+    n_o = float(counts[0])
+    if args.weight_scheme == "none":
+        w = np.ones(n_labels)
+    elif args.weight_scheme == "manual":
+        w = np.array([float(x) for x in args.manual_weights.split(",")])
+    else:
+        r = np.array([1.0] + [n_o / max(counts[c], 1) for c in range(1, n_labels)])
+        w = np.sqrt(r) if args.weight_scheme == "sqrt_inv" else r
+        w[0] = 1.0
+    print(f"\nweights ({args.weight_scheme}): " +
+          "  ".join(f"{nm}={v:.1f}" for nm, v in zip(names, w)))
+    print("  NOTE: with the quotation class present these differ from the")
+    print("  3-label run; QUOTE is the larger positive class in train.")
     class_weights = torch.tensor(w, dtype=torch.float32)
 
-    # ---- model ------------------------------------------------------------
     cfg = AutoConfig.from_pretrained(
         args.base_model, num_labels=n_labels,
         id2label={i: n for i, n in enumerate(names)},
-        label2id={n: i for i, n in enumerate(names)},
-    )
-    attn = args.attn
-    if attn == "auto":
+        label2id={n: i for i, n in enumerate(names)})
+    if args.use_features:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "src" / "tsawa"))
+        from tsawa_feat_model import build_tsawa_feat_model
+        model = build_tsawa_feat_model(
+            args.base_model, n_labels,
+            id2label={i: n for i, n in enumerate(names)},
+            label2id={n: i for i, n in enumerate(names)},
+        )
+        print("model: TsawaFeatModel (hidden ⊕ Linear(5,32)+GELU)")
+    elif args.use_crf:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "src" / "tsawa"))
+        from tsawa_crf_model import build_tsawa_crf_model
+        model = build_tsawa_crf_model(
+            args.base_model, n_labels,
+            id2label={i: n for i, n in enumerate(names)},
+            label2id={n: i for i, n in enumerate(names)},
+        )
+        print("model: TsawaCRFModel (CRF loss; no class weights)")
+    else:
         try:
-            import flash_attn  # noqa: F401
-            attn = "flash_attention_2"
-        except ImportError:
-            attn = "sdpa"
-    print(f"attention implementation: {attn}")
-    try:
-        model = AutoModelForTokenClassification.from_pretrained(
-            args.base_model, config=cfg, attn_implementation=attn)
-    except Exception as e:
-        print(f"  {attn} failed ({e}); falling back to sdpa")
-        model = AutoModelForTokenClassification.from_pretrained(
-            args.base_model, config=cfg, attn_implementation="sdpa")
+            model = AutoModelForTokenClassification.from_pretrained(
+                args.base_model, config=cfg, attn_implementation="sdpa")
+        except Exception:
+            model = AutoModelForTokenClassification.from_pretrained(
+                args.base_model, config=cfg)
 
-    # ---- training args ----------------------------------------------------
     sig = inspect.signature(TrainingArguments.__init__).parameters
-
-    ta_kwargs = dict(
-        output_dir=str(out),
-        learning_rate=args.lr,
+    ta = dict(
+        output_dir=str(out), learning_rate=args.lr,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
-        weight_decay=args.weight_decay,
-        max_grad_norm=args.grad_clip,
+        weight_decay=args.weight_decay, max_grad_norm=args.grad_clip,
         warmup_ratio=args.warmup_ratio,
         bf16=not args.no_bf16 and torch.cuda.is_available(),
         gradient_checkpointing=not args.no_grad_checkpointing,
-        logging_steps=25,
-        save_total_limit=2,
+        logging_steps=25, save_total_limit=2,
         load_best_model_at_end=True,
-        metric_for_best_model=f"eval_soft_f1_tol{args.tol}",
+        metric_for_best_model="iou50_f1",   # TSAWA only; quotation is auxiliary
         greater_is_better=True,
         report_to=os.environ.get("REPORT_TO", "none"),
-        run_name=args.run_name or
-                 f"tsawa-v2-{'io' if args.io else 'bio'}-{args.weight_scheme}",
-        seed=args.seed,
-        dataloader_num_workers=2,
+        run_name=args.run_name or f"tsawa-{scheme}-{args.weight_scheme}",
+        seed=args.seed, dataloader_num_workers=2,
     )
-    ta_kwargs["eval_strategy" if "eval_strategy" in sig else "evaluation_strategy"] = "epoch"
-    ta_kwargs["save_strategy"] = "epoch"
-
-    # Warmup fallback. v1 lost warmup entirely because transformers 5.x renamed
-    # the arg and the old code filtered it out without saying so.
+    eval_key = "eval_strategy" if "eval_strategy" in sig else "evaluation_strategy"
+    evals_per_epoch = max(1, int(args.evals_per_epoch))
+    steps_per_epoch = max(1, len(train_ds) // (args.batch_size * args.grad_accum))
+    early_patience = args.patience
+    if evals_per_epoch > 1:
+        eval_every = max(1, steps_per_epoch // evals_per_epoch)
+        ta[eval_key] = "steps"
+        ta["save_strategy"] = "steps"
+        ta["eval_steps"] = eval_every
+        ta["save_steps"] = eval_every
+        early_patience = args.patience * evals_per_epoch
+        print(
+            f"\n  evals_per_epoch={evals_per_epoch}: {eval_key}=steps "
+            f"eval_steps=save_steps={eval_every} "
+            f"(steps_per_epoch={steps_per_epoch}); "
+            f"early_stopping_patience={early_patience} "
+            f"({args.patience} epochs × {evals_per_epoch})"
+        )
+    else:
+        ta[eval_key] = "epoch"
+        ta["save_strategy"] = "epoch"
     if "warmup_ratio" not in sig:
-        steps_per_epoch = max(1, len(train_ds) // (args.batch_size * args.grad_accum))
-        derived = args.warmup_steps or int(steps_per_epoch * args.epochs * args.warmup_ratio)
+        spe = max(1, len(train_ds) // (args.batch_size * args.grad_accum))
+        steps = int(spe * args.epochs * args.warmup_ratio)
+        ta.pop("warmup_ratio")
         if "warmup_steps" in sig:
-            print(f"\n  warmup_ratio unsupported; using warmup_steps={derived}")
-            ta_kwargs.pop("warmup_ratio")
-            ta_kwargs["warmup_steps"] = derived
-        else:
-            print("\n  *** WARNING: no warmup parameter available. Training will "
-                  "start at full LR. Consider --lr 5e-6. ***")
-
-    dropped = [k for k in ta_kwargs if k not in sig]
+            ta["warmup_steps"] = steps
+            print(f"\n  warmup_ratio unsupported; warmup_steps={steps}")
+    dropped = [k for k in ta if k not in sig]
     if dropped:
-        print(f"  dropping unsupported TrainingArguments: {dropped}")
-        ta_kwargs = {k: v for k, v in ta_kwargs.items() if k in sig}
+        print(f"  dropping unsupported args: {dropped}")
+        ta = {k: v for k, v in ta.items() if k in sig}
 
-    targs = TrainingArguments(**ta_kwargs)
-
-    trainer = WeightedTrainer(
-        class_weights=class_weights,
+    trainer_kw = dict(
         model=model,
-        args=targs,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        compute_metrics=build_metrics(args.tol, args.io, names),
-        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=args.patience)],
+        args=TrainingArguments(**ta),
+        train_dataset=train_ds, eval_dataset=eval_ds,
+        compute_metrics=build_metrics(scheme, args.break_penalty),
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=early_patience)],
     )
-
+    trainer = (
+        Trainer(**trainer_kw) if args.use_crf
+        else WeightedTrainer(class_weights=class_weights, **trainer_kw)
+    )
     trainer.train(resume_from_checkpoint=args.resume or None)
 
-    # ---- evaluate ---------------------------------------------------------
     val = trainer.evaluate(eval_ds, metric_key_prefix="val")
     print("\nVALIDATION:", json.dumps(val, indent=2, default=float))
-
     test = None
-    if args.skip_test:
-        print("\nTEST: skipped (--skip-test). Frozen split, final run only.")
-    else:
+    if not args.skip_test:
         test = trainer.evaluate(ds["test"], metric_key_prefix="test")
         print("\nTEST:", json.dumps(test, indent=2, default=float))
+    else:
+        print("\nTEST: skipped. Frozen split, final run only.")
 
-    print("\nCompare against v1 (different split, orientation only):")
-    print("  missed_gold 52.0% | fragmented_gold 23.6% | orphan_pred 46.7%")
-    print("  recall was 0.000 on spans under 10 tokens")
-    print("Watch recall_tok_1-5 and recall_tok_6-10: if still zero, short spans")
-    print("are unlearnable as labelled, not merely underweighted.")
+    print("\nreference (validation, Viterbi): BIO inv 0.323 | BIOE 0.320 | "
+          "IO 0.309 | joint 0.395 | quotation model 0.853")
+    if scheme == "multi":
+        print("Quotation metrics are diagnostic only. Test quotation density is")
+        print("3.2% against train's 7.0%, so quote F1 on test is not comparable.")
 
     trainer.save_model(str(out / "best"))
     (out / "results.json").write_text(json.dumps({
-        "args": vars(args),
-        "tagging": "IO" if args.io else "BIO",
-        "split": "v2 (split_v2_frozen.csv)",
-        "label_counts": counts.tolist(),
-        "weights_raw": raw.tolist(),
-        "weights_used": w.tolist(),
-        "validation": {k: float(v) for k, v in val.items() if isinstance(v, (int, float))},
-        "test": ({k: float(v) for k, v in test.items() if isinstance(v, (int, float))}
-                 if test else None),
+        "args": vars(args), "scheme": scheme,
+        "label_counts": counts.tolist(), "weights": w.tolist(),
+        "validation": {k: float(v) for k, v in val.items()
+                       if isinstance(v, (int, float))},
+        "test": ({k: float(v) for k, v in test.items()
+                  if isinstance(v, (int, float))} if test else None),
     }, indent=2))
     print(f"\nsaved to {out}")
 

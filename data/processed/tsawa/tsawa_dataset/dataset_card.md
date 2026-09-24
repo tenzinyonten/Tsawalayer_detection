@@ -13,14 +13,14 @@ Built by `src/tsawa/build_tsawa_dataset.py` from Phase 2 `tsawa_audit.csv`.
 
 ## Cleaning
 
-- Labels from `/Users/tenzinyonten/layer_detection/data/processed/tsawa/tsawa_spans_resolved.csv` (snapped boundaries + overlap resolve).
+- Labels from `/Users/tenzinyonten/layer_detection/data/processed/tsawa/tsawa_spans_resolved.csv`.
 - Skip `dropped=True` (and empty stubs). **6** sidecar rows excluded; **21149** spans labeled.
 - Cloned `Tsawa.yml` is not rewritten.
 - Log of excluded sidecar rows: `data/processed/tsawa/dropped_spans.csv`.
 
 ## Labels
 
-- `{'O': 0, 'B-TSAWA': 1, 'I-TSAWA': 2}` / `{0: 'O', 1: 'B-TSAWA', 2: 'I-TSAWA'}`
+- `{'O': 0, 'B-TSAWA': 1, 'I-TSAWA': 2}`
 - Special tokens and padding use label `-100`.
 - Token / span straddles: labeled by the token **start** offset.
 
