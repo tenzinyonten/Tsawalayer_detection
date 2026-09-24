@@ -24,7 +24,7 @@ pip install -q \
 
 # flash-attn is optional. It roughly halves memory at 8192 tokens, but it
 # compiles slowly and breaks on mismatched CUDA/torch. Skip on failure —
-# train_tsawa.py falls back to sdpa automatically.
+# common/train_layer.py falls back to sdpa automatically.
 echo "== flash-attn (optional, ~5-10 min; failure is non-fatal) =="
 pip install -q flash-attn --no-build-isolation || \
     echo "  flash-attn unavailable; will use sdpa"
@@ -48,4 +48,4 @@ PY
 echo
 echo "Next:"
 echo "  huggingface-cli login      # dataset is private"
-echo "  python train_tsawa.py --smoke-test --output-dir /workspace/runs/smoke"
+echo "  python common/train_layer.py --smoke-test --output-dir /workspace/runs/smoke"

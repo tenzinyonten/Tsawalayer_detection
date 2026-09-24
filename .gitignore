@@ -14,8 +14,9 @@ wandb/
 book_epub/
 
 # Built datasets (large Arrow shards); provenance CSVs + cards are tracked
-data/processed/tsawa/tsawa_dataset*/
-!data/processed/tsawa/tsawa_dataset*/dataset_card.md
+tsawa/data/processed/tsawa_dataset*/
+!tsawa/data/processed/tsawa_dataset*/dataset_card.md
+tsawa/data/processed/ds_v*/
 
 # Python
 __pycache__/
@@ -34,5 +35,5 @@ venv/
 .DS_Store
 .idea/
 .vscode/
-data/processed/sabche/sabche_dataset*/
-!data/processed/sabche/sabche_dataset*/dataset_card.md
+sabche/data/processed/sabche_dataset*/
+!sabche/data/processed/sabche_dataset*/dataset_card.md

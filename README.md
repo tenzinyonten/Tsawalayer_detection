@@ -72,11 +72,11 @@ pip install -r requirements.txt   # needed for Phases 2–3; Phase 1 is stdlib-o
 
 ```bash
 # smoke-test a handful of IDs first
-python src/fetch_opf_repos.py --ids-file data/ids/newdata.txt --limit 3
+python common/fetch_opf_repos.py --ids-file data/ids/newdata.txt --limit 3
 
 # full batches (separate invocations; manifest is merged)
-python src/fetch_opf_repos.py --ids-file data/ids/newdata.txt
-python src/fetch_opf_repos.py --ids-file data/ids/olddata.txt
+python common/fetch_opf_repos.py --ids-file data/ids/newdata.txt
+python common/fetch_opf_repos.py --ids-file data/ids/olddata.txt
 ```
 
 Useful flags: `--dry-run`, `--batch NAME` (override inferred `new`/`old`),
@@ -89,13 +89,13 @@ Skip/continue on missing or private remotes; the process does not abort.
 
 Scans every checkout in `data/raw_opf/`, resolves the nested
 `<ID>.opf/<ID>.opf/` layout, parses `layers/v001/Tsawa.yml` against
-`base/v001.txt`, and writes `data/processed/tsawa/tsawa_audit.csv` plus an
+`base/v001.txt`, and writes `tsawa/data/processed/tsawa_audit.csv` plus an
 old-vs-new summary (span counts, union coverage %, `isverse`, quality flags).
 
 Spans are treated as **start inclusive, end exclusive**.
 
 ```bash
-python src/tsawa/audit_tsawa_data.py --raw-dir data/raw_opf --manifest data/raw_opf/_manifest.csv
+python tsawa/src/audit_tsawa_data.py --raw-dir data/raw_opf --manifest data/raw_opf/_manifest.csv
 ```
 
 Useful flags: `--out-csv PATH`, `--limit N`.
@@ -103,7 +103,7 @@ Useful flags: `--out-csv PATH`, `--limit N`.
 ### Phase 3 — build a tsawa BIO dataset (no training)
 
 Uses Phase 2 `tsawa_audit.csv` as the source of truth (212 Tsawa repos).
-By default labels come from `data/processed/tsawa/tsawa_spans_resolved.csv`
+By default labels come from `tsawa/data/processed/tsawa_spans_resolved.csv`
 (snapped edges + overlap resolve; skip `dropped=True`). Use `--from-yaml`
 to label raw `Tsawa.yml` instead. Cloned YAML is never rewritten.
 
@@ -116,13 +116,13 @@ coverage-quartile split (seed 42), kept so older calls do not change.
 
 ```bash
 # v2 — frozen, window-balanced split (current)
-python src/tsawa/build_tsawa_dataset.py --source combined \
-    --split-file data/processed/tsawa/split_v2_frozen.csv \
-    --out-dir data/processed/tsawa/tsawa_dataset_v2 \
-    --dropped-csv data/processed/tsawa/dropped_spans_v2.csv
+python common/build_tsawa_dataset.py --source combined \
+    --split-file tsawa/data/processed/split_v2_frozen.csv \
+    --out-dir tsawa/data/processed/tsawa_dataset_v2 \
+    --dropped-csv tsawa/data/processed/dropped_spans_v2.csv
 
 # v1 — legacy coverage-quartile split
-python src/tsawa/build_tsawa_dataset.py --source combined
+python common/build_tsawa_dataset.py --source combined
 # rollback to pre-snap YAML offsets: --from-yaml
 ```
 
@@ -132,14 +132,14 @@ Useful flags: `--split-file`, `--max-length 8192`, `--stride 5120`,
 
 ### Document split v2 (frozen)
 
-`data/processed/tsawa/split_v2_frozen.csv` + `split_v2_frozen.md`. Greedy
+`tsawa/data/processed/split_v2_frozen.csv` + `split_v2_frozen.md`. Greedy
 window-balanced assignment (seed 123) stratified on batch, `n_windows`,
 tsawa density and short-span share, honouring 11 reprint must-link groups.
 It replaced the v1 split, whose token positive density was 4.70 / 4.17 /
 5.53 %; v2 is **4.76 / 4.77 / 4.42 %**. **The test split is frozen** — do
 not use it for tuning or model selection.
 
-Output: `data/processed/tsawa/tsawa_dataset/` (`save_to_disk`) plus
+Output: `tsawa/data/processed/tsawa_dataset/` (`save_to_disk`) plus
 `dataset_card.md`. Aborts if the audit CSV drifted from the frozen Phase 2
 counts (539 / 212 / 123 new / 89 old / 41 zero-length spans) or if the
 resolved sidecar drifted from 21,155 / 6 dropped / 21,149 active.
@@ -147,7 +147,7 @@ resolved sidecar drifted from 21,155 / 6 dropped / 21,149 active.
 ## Hugging Face dataset
 
 ```bash
-python src/tsawa/push_tsawa_dataset.py
+python tsawa/src/push_tsawa_dataset.py
 # default: Yontenn/formatting-tsawa-v1
 ```
 
