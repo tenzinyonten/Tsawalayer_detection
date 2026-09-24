@@ -11,10 +11,13 @@ Per book with a non-empty Chapter layer:
 3. **Merge fragments.** Consecutive spans whose gap holds only shad, tsheg,
    spaces/tabs (never a newline: each line is its own heading) or zero
    characters become one span.
-4. **Book verdict.** Books with no Chapter spans are not in the dataset at all;
-   books whose start/end edges are still mid-syllable for more than
-   ``EXCLUDE_DIRTY`` of their spans after snapping (drifted offsets) are
-   flagged ``exclude``.
+4. **Book verdict.** Books with no Chapter spans are not in the dataset at all.
+   A book is flagged ``exclude`` when more than ``EXCLUDE_DIRTY`` of its spans
+   still have an edge mid-syllable after snapping, or when it has at least
+   ``MIN_SPANS_SHAPE`` spans and under ``EXCLUDE_SHAPE_BELOW`` of them are
+   heading-shaped (start of a line, closed by shad/bracket/newline). Those are
+   old-batch books whose offsets drift partway through (first spans right, the
+   rest cut mid-sentence); a constant shift does not recover them.
 
 Usage:
     python chapter/src/clean_chapter_spans.py
@@ -23,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import csv
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -39,6 +43,10 @@ OUT_BOOKS = ROOT / "chapter/data/processed/chapter_book_verdicts.csv"
 
 MAX_WALK = 3
 EXCLUDE_DIRTY = 0.30
+MIN_SPANS_SHAPE = 3
+EXCLUDE_SHAPE_BELOW = 0.50
+PRE = re.compile(r"(^|\n)[༈༄༅།\s\d༠-༩\(\)\{\}\[\]༼༽\.]*$")
+POST = re.compile(r"^[།༎་\s\xa0\]\)\}༽]*(\n|$)")
 GAP_CHARS = set("།༎་ \t\xa0")  # no newline: each line is its own heading
 
 
@@ -123,17 +131,24 @@ def main() -> int:
                 tot["merged_away"] += 1
             else:
                 merged.append(b)
-        verdict = "exclude" if dirty > EXCLUDE_DIRTY else "keep"
+        shaped = sum(bool(PRE.search(text[max(0, m["start"] - 6):m["start"]])
+                          and POST.match(text[m["end"]:m["end"] + 8])) for m in merged)
+        shape_rate = shaped / len(merged)
+        bad_shape = len(merged) >= MIN_SPANS_SHAPE and shape_rate < EXCLUDE_SHAPE_BELOW
+        verdict = "exclude" if dirty > EXCLUDE_DIRTY or bad_shape else "keep"
+        reason = ("edges_unfixable" if dirty > EXCLUDE_DIRTY
+                  else "offsets_drift_not_heading_shaped" if bad_shape else "")
         for m in merged:
             rows.append({"pecha_id": pid, "batch": batch, **m,
                          "dropped": verdict == "exclude",
-                         "reason": "book_offsets_unrecoverable" if verdict == "exclude" else ""})
+                         "reason": reason})
         tot["raw"] += len(raw)
         tot["final"] += len(merged)
         tot["snapped"] += sum(("start-" in x["action"] or "end+" in x["action"]) for x in sn)
         tot["unfixed"] += sum("unfixed" in x["action"] for x in sn)
         verdicts.append({"pecha_id": pid, "batch": batch, "n_raw": len(raw),
                          "n_final": len(merged), "unfixed_rate": round(dirty, 3),
+                         "shape_rate": round(shape_rate, 3),
                          "verdict": verdict})
     for path, data in ((OUT, rows), (OUT_BOOKS, verdicts)):
         with path.open("w", newline="", encoding="utf-8") as fh:

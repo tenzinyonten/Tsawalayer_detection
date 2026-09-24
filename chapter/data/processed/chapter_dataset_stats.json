@@ -1,0 +1,59 @@
+{
+  "label2id": {
+    "O": 0,
+    "B-CHAPTER": 1,
+    "I-CHAPTER": 2
+  },
+  "max_length": 8192,
+  "stride": 5120,
+  "tokenizer": "jhu-clsp/mmBERT-base",
+  "windows": {
+    "train": 9188,
+    "validation": 941,
+    "test": 941
+  },
+  "docs": {
+    "train": {
+      "docs": 304,
+      "spans": 2292,
+      "I": 189,
+      "P": 115
+    },
+    "validation": {
+      "docs": 37,
+      "spans": 477,
+      "I": 22,
+      "P": 15
+    },
+    "test": {
+      "docs": 37,
+      "spans": 273,
+      "I": 24,
+      "P": 13
+    }
+  },
+  "label_counts": {
+    "train": {
+      "O": 75039344,
+      "B-CHAPTER": 3339,
+      "I-CHAPTER": 120869
+    },
+    "validation": {
+      "O": 7682837,
+      "B-CHAPTER": 643,
+      "I-CHAPTER": 21530
+    },
+    "test": {
+      "O": 7689920,
+      "B-CHAPTER": 383,
+      "I-CHAPTER": 11169
+    }
+  },
+  "class_weights_inverse_freq_train": {
+    "O": 0.3339,
+    "B-CHAPTER": 7503.5991,
+    "I-CHAPTER": 207.2865
+  },
+  "spans_total": 3042,
+  "spans_without_B_token": 0
+}

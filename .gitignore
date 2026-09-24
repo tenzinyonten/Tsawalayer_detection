@@ -37,3 +37,4 @@ venv/
 .vscode/
 sabche/data/processed/sabche_dataset*/
 !sabche/data/processed/sabche_dataset*/dataset_card.md
+chapter/data/processed/chapter_dataset*/

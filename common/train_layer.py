@@ -70,7 +70,8 @@ from transformers import (
 NEG = -1.0e9
 
 DEFAULT_DATASETS = {"TSAWA": "Yontenn/formatting-tsawa-v6",
-                    "SABCHE": "Yontenn/formatting-sabche-v1"}
+                    "SABCHE": "Yontenn/formatting-sabche-v1",
+                    "CHAPTER": "Yontenn/formatting-chapter-v1"}
 PRIMARY = "TSAWA"     # the layer being trained; set by configure_label()
 SCHEMES: dict = {}
 ENTITIES: dict = {}    # which label ids open / continue each entity type, per scheme
