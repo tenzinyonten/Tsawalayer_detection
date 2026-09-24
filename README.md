@@ -119,7 +119,7 @@ coverage-quartile split (seed 42), kept so older calls do not change.
 python common/build_tsawa_dataset.py --source combined \
     --split-file tsawa/data/processed/split_v2_frozen.csv \
     --out-dir tsawa/data/processed/tsawa_dataset_v2 \
-    --dropped-csv tsawa/data/processed/dropped_spans_v2.csv
+    --dropped-csv tsawa/data/processed/dropped_spans.csv
 
 # v1 — legacy coverage-quartile split
 python common/build_tsawa_dataset.py --source combined

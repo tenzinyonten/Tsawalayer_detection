@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Frozen document split for the Sabche dataset (sabche split v1).
+"""Frozen document split for the Sabche dataset (83/8.5/8.5 by window count).
 
 * Books: every book with a cleaned Sabche layer, minus the book-level
   exclusions (``sabche_book_verdicts.csv`` verdict=exclude, plus
@@ -12,10 +12,10 @@
 * A group whose fixed members disagree goes to test > val > train, so every
   frozen val/test book stays where it was.
 * Remaining groups: greedy, largest first, into the split with the largest
-  relative deficit against 76/12/12 by window count (8192 / 5120).
+  relative deficit against 83/8.5/8.5 by window count (8192 / 5120).
 
-Writes sabche/data/processed/sabche_split_v1_frozen.csv,
-sabche/data/processed/sabche_excluded_books.csv, scratch/sabche/splits/sabche_split_<version>_report.json.
+Writes sabche/data/processed/sabche_split_frozen.csv,
+sabche/data/processed/sabche_excluded_books.csv, scratch/sabche/splits/sabche_split_report.json.
 """
 
 from __future__ import annotations
@@ -82,9 +82,8 @@ def parse_args(argv=None):
     import argparse
 
     p = argparse.ArgumentParser(description="Frozen Sabche document split.")
-    p.add_argument("--val-frac", type=float, default=0.12)
-    p.add_argument("--test-frac", type=float, default=0.12)
-    p.add_argument("--version", default="v1", help="split file suffix: sabche_split_<version>_frozen.csv")
+    p.add_argument("--val-frac", type=float, default=0.085)
+    p.add_argument("--test-frac", type=float, default=0.085)
     return p.parse_args(argv)
 
 
@@ -92,8 +91,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     TARGETS = {"train": 1 - args.val_frac - args.test_frac,
                "val": args.val_frac, "test": args.test_frac}
-    OUT_SPLIT = ROOT / f"sabche/data/processed/sabche_split_{args.version}_frozen.csv"
-    OUT_REPORT = ROOT / f"scratch/sabche/splits/sabche_split_{args.version}_report.json"
+    OUT_SPLIT = ROOT / "sabche/data/processed/sabche_split_frozen.csv"
+    OUT_REPORT = ROOT / "scratch/sabche/splits/sabche_split_report.json"
     audit = {r["pecha_id"]: r for r in csv.DictReader(AUDIT.open(encoding="utf-8"))}
     verdict = {r["pecha_id"]: r for r in csv.DictReader(VERDICTS.open(encoding="utf-8"))}
     v3 = {r["pecha_id"]: r for r in csv.DictReader(

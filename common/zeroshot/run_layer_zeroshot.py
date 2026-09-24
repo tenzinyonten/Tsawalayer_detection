@@ -40,9 +40,9 @@ SPLIT = ROOT / "tsawa/data/processed/split_v3_frozen.csv"
 IGNORE = ROOT / "tsawa/data/processed/v6_ignore_spans.csv"
 QUOTE_SPANS = ROOT / "tsawa/data/processed/quotation_spans_snapped.csv"
 SABCHE_SPANS = ROOT / "sabche/data/processed/sabche_spans_clean.csv"
-SABCHE_SPLIT = ROOT / "sabche/data/processed/sabche_split_v2_frozen.csv"
-SABCHE_PROMPT = ROOT / "sabche/docs/prompts/gemini_sabche_anchors_v1.md"
-PROMPT = ROOT / "tsawa/docs/prompts/gemini_tsawa_anchors_v1.md"
+SABCHE_SPLIT = ROOT / "sabche/data/processed/sabche_split_frozen.csv"
+SABCHE_PROMPT = ROOT / "sabche/docs/prompts/gemini_sabche_anchors.md"
+PROMPT = ROOT / "tsawa/docs/prompts/gemini_tsawa_anchors.md"
 MAX_SPAN = 2000  # head-to-tail ceiling for the locator
 
 

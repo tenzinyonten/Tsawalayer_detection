@@ -1,9 +1,9 @@
 # Sabche zero-shot baselines
 
 Zero-shot LLM span detection for the Sabche (section-heading) layer, scored against
-the frozen v2 split (`sabche/data/processed/sabche_split_v2_frozen.csv`) using the
+the frozen split (`sabche/data/processed/sabche_split_frozen.csv`) using the
 cleaned spans (`sabche_spans_clean.csv`). No training and no examples: each model gets
-the prompt in `sabche/docs/prompts/gemini_sabche_anchors_v1.md` on 16,000-character
+the prompt in `sabche/docs/prompts/gemini_sabche_anchors.md` on 16,000-character
 windows with 2,000 characters of overlap, and returns anchor text that is located back
 in the book.
 

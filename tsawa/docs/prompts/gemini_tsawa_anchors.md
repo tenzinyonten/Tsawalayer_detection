@@ -9,8 +9,7 @@ froze: 16,000-character windows overlapping by 2,000, cut at a shad, and
 `{spans:[{label, frame, head, tail}]}` anchors mapped back to offsets by
 `gemini_locate.py`.
 
-This is the prompt the validation run of 2026-09-22 used. It is kept as it ran;
-new work goes in `gemini_tsawa_anchors_v2.md`.
+This is the prompt the validation run of 2026-09-22 used, kept as it ran.
 
 Send everything between the two rulers as a single user turn, with the window
 text appended after `Text:`.

@@ -1,12 +1,9 @@
-# Sabche (ས་བཅད་, outline heading) dataset v2 — mmBERT BIO
+# Sabche (ས་བཅད་, outline heading) dataset — mmBERT BIO
 
 Binary token classification for the Sabche layer, built with the tsawa
 pipeline's labeling/windowing. Generated 2026-09-22.
 
-**v2 vs v1:** same spans, exclusions, link rules and document groups; only
-the split targets changed, from 76/12/12 to 83/8.5/8.5 by window count
-(`sabche_split_v2_frozen.csv`). v1 (`sabche_dataset_v1`,
-`sabche_split_v1_frozen.csv`) is kept unchanged.
+Split: 83/8.5/8.5 by window count (`sabche_split_frozen.csv`).
 
 | item | value |
 |---|---|
@@ -16,7 +13,7 @@ the split targets changed, from 76/12/12 to 83/8.5/8.5 by window count
 | label rule | token-start rule (`build_tsawa_dataset.label_tokens`) |
 | columns | input_ids, attention_mask, labels, token_start, token_end, char_start, char_end, pecha_id, source_batch, window_index, n_tokens_doc, coverage_pct (no `features` column) |
 | span source | `sabche/data/processed/sabche_spans_clean.csv` (dropped=False) |
-| split | `sabche/data/processed/sabche_split_v2_frozen.csv` (**test frozen**) |
+| split | `sabche/data/processed/sabche_split_frozen.csv` (**test frozen**) |
 | metric (for training) | IoU ≥ 0.5, greedy one-to-one, inclusive offsets — same as tsawa/quotation |
 
 ## Pipeline
@@ -24,9 +21,9 @@ the split targets changed, from 76/12/12 to 83/8.5/8.5 by window count
 ```bash
 python scratch/sabche/scripts/audit_sabche.py          # A: audit (read-only)
 python sabche/src/clean_sabche_spans.py        # B: sidecar + book verdicts
-python sabche/src/prepare_sabche_split.py --val-frac 0.085 --test-frac 0.085 --version v2
-python sabche/src/build_sabche_dataset.py --split-file sabche/data/processed/sabche_split_v2_frozen.csv \
-    --out-dir sabche/data/processed/sabche_dataset_v2 --stats-json sabche/data/processed/sabche_dataset_v2_stats.json
+python sabche/src/prepare_sabche_split.py --val-frac 0.085 --test-frac 0.085
+python sabche/src/build_sabche_dataset.py --split-file sabche/data/processed/sabche_split_frozen.csv \
+    --out-dir sabche/data/processed/sabche_dataset --stats-json sabche/data/processed/sabche_dataset_stats.json
 ```
 
 ## A. Audit (raw Sabche.yml offsets)
@@ -98,7 +95,7 @@ I55D7A55C, IE166DA22, I78C84F85, I8698A1DF and IAAADCAA0 have real
 one-per-line headings. Low span count on its own isn't used as an exclusion
 reason: 31 books with fewer than 10 spans are kept.
 
-## B. Split (sabche split v2)
+## B. Split
 
 - All 116 split_v3 books that remain keep their split, except the 3 moved by
   conflict resolution.
@@ -131,12 +128,10 @@ reason: 31 books with fewer than 10 spans are kept.
 
 Leakage (long spans verbatim in any train book):
 
-| split | split_v3 as-is, Sabche books only | v1 (12/12) | **v2 (8.5/8.5)** |
-|---|---|---|---|
-| val | 0.5% | 1.35% (32 / 2,372) | **1.6% (26 / 1,630)** |
-| test | 1.4% | 1.89% (42 / 2,222) | **2.49% (43 / 1,728)** |
-
-On all 323 books at 12/12, before the 10-shared-spans rule, it was val 3.04% / test 6.02%.
+| split | split_v3 as-is, Sabche books only | this split (8.5/8.5) |
+|---|---|---|
+| val | 0.5% | **1.6% (26 / 1,630)** |
+| test | 1.4% | **2.49% (43 / 1,728)** |
 
 **Test leakage, all span lengths:** 14.2% raw text overlap in test, but 84%
 of gold spans are unique text and most overlap is stock phrasing (e.g.
