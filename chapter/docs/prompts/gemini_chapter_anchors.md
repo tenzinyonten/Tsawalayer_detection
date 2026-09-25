@@ -45,6 +45,10 @@ An empty list is the right answer for about three windows in four. More than hal
 have only one or two titles in the whole book. Do not invent titles to fill a window. A stretch of exposition, verse,
 or argument with no title line gets {"spans": []}.
 
+A window containing many short heading-like lines (10 or more) is almost certainly showing
+Sabche outline headings, not Chapter titles. In that case return {"spans": []} unless you can
+clearly identify a work title or numbered chapter line among them.
+
 Deciding
 
 1. Is the candidate a line on its own that opens a new division: a chapter number, a work
