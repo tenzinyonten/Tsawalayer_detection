@@ -144,6 +144,8 @@ def call_gemini(client, types, model: str, prompt: str, chunk: str,
             }
         except Exception as exc:  # noqa: BLE001 — the SDK raises many shapes
             msg = str(exc)
+            if "credits are depleted" in msg or "billing" in msg.lower() or msg.startswith("402"):
+                raise SystemExit(f"Gemini billing problem, stopping: {msg[:200]}")
             if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
                 if "PerDay" in msg or "per day" in msg.lower():
                     raise SystemExit(f"daily quota reached, stopping: {msg[:200]}")
@@ -374,6 +376,8 @@ def main():
                 else:
                     raw, meta = call_gemini(client, types, args.model, prompt,
                                             c["text"], args.temperature)
+                if meta.get("finish") == "failed":     # never cache a failed call as an empty answer
+                    raise SystemExit(f"{book} window {i}: the call failed, nothing saved; re-run to retry")
                 rec = {"book": book, "window": i, "start": c["start"],
                        "end": c["end"], "raw": raw, **meta}
                 cache.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
