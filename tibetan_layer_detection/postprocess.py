@@ -4,27 +4,28 @@
 Joins Stage 2's predictions/<book_id>.json (spans + confidence) with Stage
 1's preprocessed/<book_id>.json (source text + source_path -- predictions
 alone carry neither) and writes final JSON, HTML, and/or OpenPecha .opf
-output, plus a batch summary and a run log. No model is loaded here; this
-stage is pure formatting and can be re-run cheaply, including with a
-different --review-threshold, without re-running inference.
+output, plus a batch summary and a run log.
 
 --opf writes predictions as OpenPecha-shaped layer YAML under
 layers/predicted/, a SIBLING of the real layers/v001/, never that folder
-itself -- layers/v001/ holds the gold annotations this project's whole
-dataset pipeline (tsawa_audit.csv and every layer's clean/split scripts)
-reads as ground truth, and this tool must not be able to silently overwrite
-that. Only fires for a book whose Stage 1 source_path matches the real
-OpenPecha layout (<id>.opf/<id>.opf/base/v001.txt); anything else is skipped
-with a warning. Schema verified against real files before writing any code:
-data/raw_opf/P000201.opf's Tsawa.yml/Sabche.yml/Chapter.yml,
-data/raw_opf/P000172.opf's Quotation.yml, data/raw_opf/I058DD999.opf's
-Yigchung.yml. Deliberately does not add a confidence field there, to keep an
-exact structural match with those files; confidence lives in the JSON
-output only.
+itself -- layers/v001/ holds the gold annotations this project's dataset
+pipeline reads as ground truth, and this tool must not be able to silently
+overwrite that. Only fires for a book whose Stage 1 source_path matches the
+real OpenPecha layout (<id>.opf/<id>.opf/base/v001.txt); anything else is
+skipped with a warning. Schema verified against real files in this repo
+before writing any code: data/raw_opf/P000201.opf's Tsawa.yml/Sabche.yml/
+Chapter.yml, data/raw_opf/P000172.opf's Quotation.yml, data/raw_opf/
+I058DD999.opf's Yigchung.yml. Deliberately does not add a confidence field
+there, to keep an exact structural match with those files; confidence lives
+in the JSON output only.
 
-Usage
------
-    python common/postprocess.py --input predictions/ --source preprocessed/ \\
+pyyaml is a required dependency of this package (see pyproject.toml), so,
+unlike an earlier standalone version of this tool where PyYAML was made an
+optional lazy import, it is imported normally here at module level.
+
+Usage (as an installed console script)
+---------------------------------------
+    tibetan-postprocess --input predictions/ --source preprocessed/ \\
         --out output/ --json --html --opf --review-threshold 0.7
 """
 
@@ -40,9 +41,7 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
-from layer_config import LAYERS  # noqa: E402
+from .layer_config import LAYERS
 
 
 # ---------------------------------------------------------------------------
@@ -89,9 +88,7 @@ def write_json(book_id: str, text_length: int, layers: dict[str, list[dict]],
 def opf_root_for(source_path: Path) -> Path | None:
     """<id>.opf/<id>.opf/base/v001.txt -> the inner <id>.opf directory (the
     real OpenPecha root, where layers/v001/ lives), or None if source_path
-    doesn't match that exact layout. Deliberately strict (checks both the
-    immediate "base" parent and a ".opf"-suffixed grandparent) rather than
-    guessing, since this decides where files get written."""
+    doesn't match that exact layout."""
     if source_path.name == "v001.txt" and source_path.parent.name == "base":
         grandparent = source_path.parent.parent
         if grandparent.name.endswith(".opf"):

@@ -2,8 +2,7 @@
 """preprocess.py -- Stage 1 of the layer-detection pipeline: text extraction.
 
 Turns .txt files or raw OpenPecha .opf book folders into one plain JSON per
-book, with no model involved. Splitting this out of detect_layers.py let it
-run independently and be re-run without re-downloading/re-running any model.
+book, with no model involved.
 
 Input can be a single .txt file, a single OpenPecha book folder (anything
 containing a base/v001.txt at any depth, e.g. <id>.opf/ or the doubly-nested
@@ -12,20 +11,17 @@ combines a flat *.txt glob with a recursive **/base/v001.txt glob, which
 covers all three cases without needing to special-case "is this an .opf
 folder" at the top level.
 
-book_id: every OpenPecha book's text file is literally named base/v001.txt,
-so the filename stem is useless as a book id -- multiple books discovered
-under one --input folder would collide. infer_book_id() instead uses the
-grandparent folder name (v001.txt's grandparent, e.g.
+infer_book_id(): every OpenPecha book's text file is literally named
+base/v001.txt, so the filename stem is useless as a book id -- it uses the
+grandparent folder name instead (v001.txt's grandparent, e.g.
 P000201.opf/P000201.opf/base/v001.txt -> P000201), stripping a trailing
 ".opf", and warns rather than guessing when that grandparent doesn't look
-like a real OpenPecha id (this exact fix, and the warning refinement, were
-built and verified for the standalone tibetan-layer-detection-pipeline repo
-first; this is the same logic, not a new design).
+like a real OpenPecha id.
 
-Usage
------
-    python common/preprocess.py --input book.txt --out preprocessed/
-    python common/preprocess.py --input data/raw_opf/ --out preprocessed/
+Usage (as an installed console script)
+---------------------------------------
+    tibetan-preprocess --input book.txt --out preprocessed/
+    tibetan-preprocess --input data/raw_opf/ --out preprocessed/
 """
 
 from __future__ import annotations
@@ -38,10 +34,7 @@ from pathlib import Path
 
 def discover_inputs(input_path: Path) -> list[Path]:
     """A .txt file -> itself. A directory -> every flat *.txt directly inside
-    it, plus every base/v001.txt found at any depth (Path.rglob("base/v001.txt")
-    == glob("**/base/v001.txt")) -- this one rule covers a single .opf book
-    folder, a folder of many .opf book folders, and a folder of already-
-    renamed .txt files, without distinguishing them explicitly."""
+    it, plus every base/v001.txt found at any depth."""
     if input_path.is_file():
         return [input_path]
     if not input_path.is_dir():
@@ -52,10 +45,7 @@ def discover_inputs(input_path: Path) -> list[Path]:
 
 
 def infer_book_id(path: Path) -> str:
-    """See module docstring. Falls back to the plain filename stem when the
-    path isn't the real OpenPecha layout, warning first if the filename is
-    the generic "v001" (where a wrong guess would be actively misleading,
-    not just generic)."""
+    """See module docstring."""
     if path.stem == "v001":
         grandparent = path.parent.parent.name
         if grandparent.endswith(".opf"):
@@ -70,12 +60,9 @@ def infer_book_id(path: Path) -> str:
 
 def load_text(path: Path) -> tuple[str | None, list[str]]:
     """Reads path as UTF-8. On a decode error, retries with errors="replace"
-    and records a warning rather than failing outright -- "log and skip"
-    in the spec is read here as: skip only when there is no usable text at
-    all (total read failure, or the result is empty); a successful, if
-    imperfect, replace-decode still produces a usable book. Returns
-    (text_or_None, errors); text is None only when the caller should skip
-    this file entirely."""
+    and records a warning rather than failing outright -- skip (return None)
+    only when there is no usable text at all (total read failure, or the
+    result is empty)."""
     errors: list[str] = []
     try:
         text = path.read_text(encoding="utf-8")

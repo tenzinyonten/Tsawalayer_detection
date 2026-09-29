@@ -3,27 +3,24 @@
 
 Reads Stage 1's preprocessed/<book_id>.json files, runs each requested
 layer's model over the text (windowing, Viterbi decoding, confidence), and
-writes predictions/<book_id>.json per book. No text rendering and no
-filesystem writes back to any .opf here -- that's Stage 3's job; this stage
-only ever produces raw span predictions.
+writes predictions/<book_id>.json per book.
 
-This is exactly the windowing/model/decode logic that used to live inline in
-detect_layers.py (sliding_windows/special_token_ids reused from
-build_tsawa_dataset.py; the BIO Viterbi decoder reused from
-eval_viterbi_iou.py; the BIOE decoder and the Yigchung stitched-decode path
-are this project's own code, unchanged from before the split) -- moved here
-verbatim, not rewritten.
+Windowing (.windows) and BIO/BIOE Viterbi decoding + confidence (.decode)
+are self-contained, dependency-light copies of the logic in this repo's
+common/build_tsawa_dataset.py and common/eval_viterbi_iou.py -- imported as
+package-relative modules here (not via a sys.path hack to a sibling
+directory) so this package is actually importable once pip-installed
+(site-packages only contains the package's own files, not this repo's
+top-level common/).
 
 Checkpointing: a book is skipped if predictions/<book_id>.json already
 exists, so a crashed run resumes where it left off. This checks file
-EXISTENCE only, not which layers that file covers -- if you change --layers
-partway through a batch, delete the old predictions files for books you want
-re-run with the new layer set; this script won't detect the mismatch itself.
+EXISTENCE only, not which layers that file covers.
 
-Usage
------
-    python common/infer.py --input preprocessed/ --out predictions/ --all
-    python common/infer.py --input preprocessed/ --out predictions/ --layers tsawa sabche --device cuda
+Usage (as an installed console script)
+---------------------------------------
+    tibetan-infer --input preprocessed/ --out predictions/ --all
+    tibetan-infer --input preprocessed/ --out predictions/ --layers tsawa sabche --device cuda
 """
 
 from __future__ import annotations
@@ -37,143 +34,14 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
-from build_tsawa_dataset import sliding_windows, special_token_ids  # noqa: E402
-from eval_viterbi_iou import spans_from_bio, transition_matrix, viterbi  # noqa: E402
-from layer_config import LAYERS, LayerConfig  # noqa: E402
+from .decode import (
+    merge_char_spans, softmax, span_confidences, spans_from_bio, spans_from_bioe,
+    transition_matrix, viterbi, viterbi_bioe,
+)
+from .layer_config import LAYERS, LayerConfig
+from .windows import pack_window_for_inference, sliding_windows, special_token_ids
 
 CONTENT_MAX = 8190  # max_length 8192 - CLS - SEP, shared by every layer here
-
-
-# ---------------------------------------------------------------------------
-# BIOE Viterbi (Quotation only; no BIOE decoder existed in common/ before
-# this was first written inline in detect_layers.py)
-# ---------------------------------------------------------------------------
-# Label ids, matching BDRC/Bo-Quotation-Detection's config.json and
-# train_layer.py's "bioe" scheme (ENTITIES["bioe"] = (b=1, i=2, e=3)):
-#   O=0  B=1  I=2  E=3
-# Legal grammar: a span is exactly  B I* E  (an I never opens or closes a
-# span, and O never continues one). First token may not be I or E; a token
-# after E may be O (span closed) or a fresh B (new span starts immediately).
-NEG = -1.0e9
-O, B, I, E = 0, 1, 2, 3
-
-
-def bioe_transition_matrix(break_penalty: float) -> np.ndarray:
-    """m[i, j] = cost of moving FROM state i TO state j (added to j's score)."""
-    m = np.zeros((4, 4))
-    legal = {
-        (O, O), (O, B),
-        (B, I), (B, E),
-        (I, I), (I, E),
-        (E, O), (E, B),
-    }
-    for i in range(4):
-        for j in range(4):
-            if (i, j) not in legal:
-                m[i, j] = NEG
-    m[E, O] -= break_penalty  # the only legal way to end a span
-    return m
-
-
-def viterbi_bioe(logits: np.ndarray, break_penalty: float) -> np.ndarray:
-    T, C = logits.shape
-    if C != 4:
-        raise SystemExit(f"viterbi_bioe expects 4 labels, got {C}")
-    tr = bioe_transition_matrix(break_penalty)
-    dp = np.full((T, C), NEG)
-    back = np.zeros((T, C), dtype=np.int64)
-    dp[0] = logits[0]
-    dp[0, I] = NEG
-    dp[0, E] = NEG
-    for t in range(1, T):
-        s = dp[t - 1][:, None] + tr
-        back[t] = s.argmax(0)
-        dp[t] = s.max(0) + logits[t]
-    # the sequence must not end mid-span (B or I with no E)
-    dp[-1, B] = NEG
-    dp[-1, I] = NEG
-    path = np.zeros(T, dtype=np.int64)
-    path[-1] = int(dp[-1].argmax())
-    for t in range(T - 1, 0, -1):
-        path[t - 1] = back[t, path[t]]
-    return path
-
-
-def spans_from_bioe(seq: np.ndarray) -> list[tuple[int, int]]:
-    """Legal O,B,I,E sequence -> inclusive (start, end) spans."""
-    out, start = [], None
-    for i, v in enumerate(seq):
-        if v == B:
-            start = i
-        elif v == E:
-            if start is not None:
-                out.append((start, i))
-                start = None
-    return out
-
-
-# ---------------------------------------------------------------------------
-# text -> windows -> model -> character spans
-# ---------------------------------------------------------------------------
-
-def pack_window_for_inference(input_ids, offsets, w_start, w_end, cls_id, sep_id, pad_id, max_length):
-    """Like build_tsawa_dataset.pack_window, minus the training-only `labels`
-    column (there is nothing to label at inference time)."""
-    content_ids = input_ids[w_start:w_end]
-    content_off = offsets[w_start:w_end]
-    ids = [cls_id] + content_ids + [sep_id]
-    mask = [1] * len(ids)
-    pad_n = max_length - len(ids)
-    if pad_n:
-        ids = ids + [pad_id] * pad_n
-        mask = mask + [0] * pad_n
-    return ids, mask, content_off
-
-
-def softmax(logits: np.ndarray) -> np.ndarray:
-    m = logits.max(axis=-1, keepdims=True)
-    e = np.exp(logits - m)
-    return e / e.sum(axis=-1, keepdims=True)
-
-
-def span_confidences(probs: np.ndarray, seq: np.ndarray,
-                     tok_spans: list[tuple[int, int]]) -> list[float]:
-    """Mean softmax probability of the DECODED (Viterbi-chosen) label over
-    each span's tokens. Not argmax confidence: Viterbi can legally pick a
-    lower-scoring label to satisfy the BIO/BIOE grammar (e.g. continuing a
-    span through a token whose argmax was O), and it's that chosen label's
-    probability the span should be judged on, not whatever argmax preferred."""
-    out = []
-    for a, b in tok_spans:
-        p = probs[a:b + 1]
-        chosen = seq[a:b + 1]
-        out.append(float(p[np.arange(len(chosen)), chosen].mean()))
-    return out
-
-
-def merge_char_spans(spans: list[tuple[int, int, float]]) -> list[tuple[int, int, float]]:
-    """Union-merge spans that touch or overlap. Spans come from overlapping
-    windows, so the same real span can appear (with slightly different edges)
-    from two windows; this merges those into one, combining confidence as a
-    character-length-weighted mean of the merged pieces (an approximation:
-    when three or more pieces chain together the result depends on merge
-    order, since each new piece folds into the running accumulated span
-    rather than all pieces being averaged at once). Known limitation: two
-    genuinely distinct spans that happen to touch would also merge. A more
-    careful policy (e.g. prefer the copy from whichever window has it most
-    centered) is possible but not implemented here."""
-    out: list[tuple[int, int, float]] = []
-    for s, e, c in sorted(spans, key=lambda x: (x[0], x[1])):
-        if out and s <= out[-1][1]:
-            os_, oe, oc = out[-1]
-            ol, nl = oe - os_, e - s
-            merged_c = (oc * ol + c * nl) / (ol + nl) if (ol + nl) else oc
-            out[-1] = (os_, max(oe, e), merged_c)
-        else:
-            out.append((s, e, c))
-    return out
 
 
 def _window_logits(text_input_ids, offsets, w_start, w_end, cls_id, sep_id, pad_id, model, device):
@@ -194,15 +62,10 @@ def run_layer(text: str, tok, model, cfg: LayerConfig, device: str) -> tuple[lis
 
     Two decode policies, per cfg.stitch_first_window:
       - default (Tsawa, Sabche, Chapter, Quotation): decode each window
-        independently, then union-merge the resulting character spans. This
-        is what each of those models' own published test scores used
-        ("each book is decoded once and duplicates from overlapping windows
-        are removed").
-      - stitched (Yigchung only, as of 2026-09-28): a token's logits come
-        only from the first window that covers it (matching how later
-        copies were masked out of the training loss), and the whole
-        document is Viterbi-decoded once as a single sequence. See
-        run_layer_stitched().
+        independently, then union-merge the resulting character spans.
+      - stitched (Yigchung only): a token's logits come only from the first
+        window that covers it, and the whole document is Viterbi-decoded
+        once as a single sequence. See run_layer_stitched().
     """
     import torch
 
@@ -243,12 +106,9 @@ def run_layer(text: str, tok, model, cfg: LayerConfig, device: str) -> tuple[lis
 
 def run_layer_stitched(input_ids, offsets, wins, cls_id, sep_id, pad_id, model, cfg: LayerConfig, device) -> list[tuple[int, int, float]]:
     """Yigchung's own inference recipe: each absolute token index gets its
-    logits from the FIRST window (in window order) that covers it -- this
-    matches training, where a token repeated in a later, overlapping window
-    was masked out of the loss (-100), so the model was never trained to
-    produce a meaningful prediction for that token on its second exposure.
-    The stitched, whole-document logit sequence is then Viterbi-decoded once,
-    rather than decoding each window separately and merging spans afterward."""
+    logits from the FIRST window that covers it, matching how later copies
+    were masked out of the training loss. The stitched, whole-document logit
+    sequence is then Viterbi-decoded once, not per window then merged."""
     n_tokens = len(input_ids)
     n_labels = 4 if cfg.scheme == "bioe" else 3
     stitched = np.zeros((n_tokens, n_labels), dtype=np.float32)
@@ -292,13 +152,12 @@ def load_layer_model(name: str, device: str):
     try:
         tok = AutoTokenizer.from_pretrained(cfg.repo, token=token)
     except Exception as e:
-        # karma689/tibetan-quotation-detection (now BDRC/Bo-Quotation-Detection)
-        # ships a tokenizer_config.json in a newer format (extra_special_tokens
-        # as a list) that this transformers version cannot parse. Its own
-        # README and the Sabche/Tsawa/Chapter cards all state the tokenizer is
-        # an unchanged copy of jhu-clsp/mmBERT-base, so falling back to that
-        # base copy is not a behavior change, only a workaround for this one
-        # repo's broken config.
+        # BDRC/Bo-Quotation-Detection and BDRC/Bo-Yigchung-Detection ship a
+        # tokenizer_config.json in a newer format (extra_special_tokens as a
+        # list) that some transformers versions cannot parse. Their own
+        # READMEs state the tokenizer is an unchanged copy of
+        # jhu-clsp/mmBERT-base, so falling back to that base copy is not a
+        # behavior change, only a workaround.
         print(f"  [warn] {cfg.repo}: own tokenizer failed to load ({e}); "
               f"falling back to jhu-clsp/mmBERT-base", file=sys.stderr)
         tok = AutoTokenizer.from_pretrained("jhu-clsp/mmBERT-base", token=token)
@@ -324,16 +183,14 @@ def load_layer_model(name: str, device: str):
 
 def already_done(book_id: str, out_dir: Path) -> bool:
     """Checkpointing: True if out_dir/<book_id>.json already exists. File
-    existence only -- does not check which layers that file covers (see the
-    module docstring)."""
+    existence only -- does not check which layers that file covers."""
     return (out_dir / f"{book_id}.json").exists()
 
 
 def infer_one(book: dict, layer_names: list[str], device: str) -> dict:
     """book is one Stage 1 payload (book_id + text, at least). Returns the
     predictions payload: raw (unrounded) confidence per span, plus n_windows
-    and elapsed_s per layer and any per-layer errors, so Stage 3 can report
-    timing/window counts without re-running inference."""
+    and elapsed_s per layer and any per-layer errors."""
     text, book_id = book["text"], book["book_id"]
     layers: dict[str, list[dict]] = {}
     n_windows: dict[str, int] = {}
