@@ -34,6 +34,12 @@ class LayerConfig:
     source: str  # where break_penalty/stride came from, for the --help text and logs
     stitch_first_window: bool = False  # see infer.run_layer_stitched(); only Yigchung as of 2026-09-28
     caveat: str = ""  # printed once when the layer is loaded, for a known-weak model
+    default_review_threshold: float = 0.7  # used by postprocess.py's --review-threshold
+    # when that flag is omitted; passing --review-threshold explicitly overrides every
+    # layer alike, same as before this field existed. Chosen per layer by task precision:
+    # sabche's model is very precise (0.85, a high bar), chapter fairly precise (0.75),
+    # quotation moderate (0.65), tsawa and yigchung are the hardest tasks (0.5, a low bar
+    # so more of their spans surface for review rather than being silently trusted).
 
 
 LAYERS: dict[str, LayerConfig] = {
@@ -41,23 +47,27 @@ LAYERS: dict[str, LayerConfig] = {
         repo="BDRC/Bo-Tsawa-Detection", scheme="bio",
         break_penalty=4.0, stride=5120, color="#f5e34d",  # yellow
         source="BDRC/Bo-Tsawa-Detection training/test_metrics.json (decoding.break_penalty)",
+        default_review_threshold=0.5,
     ),
     "sabche": LayerConfig(
         repo="BDRC/Bo-Sabche-detection", scheme="bio",  # NB: repo has lowercase 'detection'
         break_penalty=4.0, stride=5120, color="#4d9df5",  # blue
         source="BDRC/Bo-Sabche-detection training/test_metrics.json (decoding.break_penalty)",
+        default_review_threshold=0.85,
     ),
     "chapter": LayerConfig(
         repo="BDRC/Bo-Chapter-Detection", scheme="bio",
         break_penalty=4.0, stride=5120, color="#4df57a",  # green
         source="BDRC/Bo-Chapter-Detection training/test_metrics.json (decoding.break_penalty); "
                "dataset revision c8c758ed matches the stratified Chapter split built in this repo",
+        default_review_threshold=0.75,
     ),
     "quotation": LayerConfig(
         repo="BDRC/Bo-Quotation-Detection", scheme="bioe",
         break_penalty=0.0, stride=3613, color="#f5a23d",  # orange
         source="BDRC/Bo-Quotation-Detection training/config.yaml / training/test_metrics.json "
                "(decode_chosen_on_validation.break_penalty; max_length 8192 / stride 3613)",
+        default_review_threshold=0.65,
     ),
     "yigchung": LayerConfig(
         repo="BDRC/Bo-Yigchung-Detection", scheme="bio",
@@ -70,5 +80,6 @@ LAYERS: dict[str, LayerConfig] = {
         caveat="this model's own README says to cite its test F1 of 0.431 (precision 0.464, "
                "recall 0.402), well below the other layers; one test book had 107 gold spans "
                "and zero true positives at this break penalty",
+        default_review_threshold=0.5,
     ),
 }

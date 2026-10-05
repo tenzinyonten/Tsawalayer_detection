@@ -10,9 +10,12 @@ output, plus a batch summary and a run log.
 layers/predicted/, a SIBLING of the real layers/v001/, never that folder
 itself -- layers/v001/ holds the gold annotations this project's dataset
 pipeline reads as ground truth, and this tool must not be able to silently
-overwrite that. Only fires for a book whose Stage 1 source_path matches the
-real OpenPecha layout (<id>.opf/<id>.opf/base/v001.txt); anything else is
-skipped with a warning. Schema verified against real files in this repo
+overwrite that. A book whose Stage 1 source_path matches the real
+OpenPecha layout (<id>.opf/<id>.opf/base/v001.txt) gets its layers written
+next to its own base/. Any other input (a plain .txt) gets a fresh minimal
+structure under --out: <id>.opf/<id>.opf/base/v001.txt (a copy of the input)
+plus layers/predicted/ with all five layer files, empty ones included.
+Schema verified against real files in this repo
 before writing any code: data/raw_opf/P000201.opf's Tsawa.yml/Sabche.yml/
 Chapter.yml, data/raw_opf/P000172.opf's Quotation.yml, data/raw_opf/
 I058DD999.opf's Yigchung.yml. Deliberately does not add a confidence field
@@ -34,6 +37,7 @@ from __future__ import annotations
 import argparse
 import html as html_mod
 import json
+import shutil
 import sys
 import uuid
 from datetime import datetime
@@ -60,19 +64,48 @@ def load_pair(book_id: str, predictions_dir: Path, preprocessed_dir: Path) -> tu
 
 
 # ---------------------------------------------------------------------------
+# per-layer review thresholds
+# ---------------------------------------------------------------------------
+
+def threshold_for(layer_name: str, review_threshold: float | None) -> float:
+    """review_threshold is the --review-threshold CLI value: a specific
+    number applies to every layer alike (the pre-existing behavior), None
+    (its new default) falls back to that layer's own
+    LAYERS[name].default_review_threshold."""
+    return LAYERS[layer_name].default_review_threshold if review_threshold is None else review_threshold
+
+
+# ---------------------------------------------------------------------------
 # output: JSON
 # ---------------------------------------------------------------------------
 
+def _span_payload(s: dict, name: str, review_threshold: float | None) -> dict:
+    """Builds one span's output dict. review_needed is true if its confidence
+    is below that layer's threshold (threshold_for), OR -- when this span
+    came from a --dual-window run -- the two window sizes disagreed on it
+    (dual_window_agreement != "both"): disagreement is itself a reason to
+    flag a span for review, independent of confidence."""
+    out = {"start": s["start"], "end": s["end"], "confidence": round(s["confidence"], 4),
+          "window_votes": s.get("window_votes", 1)}
+    agreement = s.get("dual_window_agreement")
+    if agreement is not None:
+        out["dual_window_agreement"] = agreement
+    out["review_needed"] = (s["confidence"] < threshold_for(name, review_threshold)
+                           or agreement not in (None, "both"))
+    return out
+
+
 def write_json(book_id: str, text_length: int, layers: dict[str, list[dict]],
-              errors: dict[str, str], out_dir: Path, review_threshold: float) -> Path:
+              errors: dict[str, str], out_dir: Path, review_threshold: float | None) -> Path:
+    """review_threshold: a single value applied to every layer, or None to use
+    each layer's own LAYERS[name].default_review_threshold instead (see
+    threshold_for)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{book_id}.json"
     payload = {
         "book_id": book_id,
         "text_length": text_length,
-        "layers": {name: [{"start": s["start"], "end": s["end"], "confidence": round(s["confidence"], 4),
-                          "review_needed": s["confidence"] < review_threshold}
-                         for s in spans]
+        "layers": {name: [_span_payload(s, name, review_threshold) for s in spans]
                   for name, spans in layers.items()},
     }
     if errors:
@@ -96,7 +129,18 @@ def opf_root_for(source_path: Path) -> Path | None:
     return None
 
 
-def write_opf_layers(layers: dict[str, list[dict]], opf_root: Path) -> list[Path]:
+def write_plain_opf(book_id: str, source_path: Path, out_dir: Path) -> Path:
+    """For a plain .txt input: create <out>/<id>.opf/<id>.opf/ with
+    base/v001.txt (a copy of the input) and return that inner root, ready for
+    write_opf_layers (which fills layers/predicted/)."""
+    root = out_dir / f"{book_id}.opf" / f"{book_id}.opf"
+    (root / "base").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, root / "base" / "v001.txt")
+    return root
+
+
+def write_opf_layers(layers: dict[str, list[dict]], opf_root: Path,
+                     write_empty: bool = False) -> list[Path]:
     """Write predictions as OpenPecha-shaped layer YAML under
     layers/predicted/ (see module docstring for the safety rationale and the
     real files this schema was verified against)."""
@@ -104,7 +148,7 @@ def write_opf_layers(layers: dict[str, list[dict]], opf_root: Path) -> list[Path
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for name, spans in layers.items():
-        if not spans:
+        if not spans and not write_empty:
             continue
         layer_name = name.capitalize()
         data = {
@@ -208,9 +252,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--opf", action="store_true",
                     help="also write predictions as OpenPecha layer YAML under "
                          "layers/predicted/ (never layers/v001/); only for books "
-                         "whose Stage 1 source_path matches <id>.opf/<id>.opf/base/v001.txt")
-    ap.add_argument("--review-threshold", type=float, default=0.7,
-                    help="a span with confidence below this is flagged review_needed")
+                         "whose Stage 1 source_path matches <id>.opf/<id>.opf/base/v001.txt; "
+                         "for a plain .txt input, builds <out>/<id>.opf/<id>.opf/ with "
+                         "base/v001.txt (a copy of the input) and layers/predicted/")
+    ap.add_argument("--review-threshold", type=float, default=None,
+                    help="a span with confidence below this is flagged review_needed, "
+                         "for every layer. Default: each layer's own threshold from "
+                         "layer_config.py (tsawa/yigchung 0.5, sabche 0.85, chapter 0.75, "
+                         "quotation 0.65)")
     return ap.parse_args(argv)
 
 
@@ -240,16 +289,22 @@ def main(argv=None) -> int:
             p = write_html(book_id, text, layers, errors, args.out)
             print(f"[{i}/{len(files)}] wrote {p}")
         if args.opf:
-            root = opf_root_for(Path(preprocessed["source_path"]))
-            if root is None:
-                print(f"  [warn] {book_id}: {preprocessed['source_path']} doesn't match "
-                      f"<id>.opf/<id>.opf/base/v001.txt; skipping --opf output for this book",
-                      file=sys.stderr)
-            else:
-                for p in write_opf_layers(layers, root):
+            source_path = Path(preprocessed["source_path"])
+            root = opf_root_for(source_path)
+            plain = root is None
+            if plain:
+                if source_path.is_file():
+                    root = write_plain_opf(book_id, source_path, args.out)
+                else:
+                    print(f"  [warn] {book_id}: {source_path} not found; "
+                          f"skipping --opf output for this book", file=sys.stderr)
+            if root is not None:
+                for p in write_opf_layers(layers, root, write_empty=plain):
                     print(f"[{i}/{len(files)}] wrote {p}")
 
-        review_needed = {n: sum(1 for s in spans if s["confidence"] < args.review_threshold)
+        review_needed = {n: sum(1 for s in spans
+                               if s["confidence"] < threshold_for(n, args.review_threshold)
+                               or s.get("dual_window_agreement") not in (None, "both"))
                          for n, spans in layers.items()}
         combined_errors = dict(errors)
         if preprocessed.get("errors"):
@@ -259,6 +314,7 @@ def main(argv=None) -> int:
             "n_windows": predictions.get("n_windows", {}), "elapsed_s": predictions.get("elapsed_s", {}),
             "spans": {n: len(spans) for n, spans in layers.items()},
             "review_needed": review_needed,
+            "short_spans_removed": predictions.get("short_spans_removed", {}),
             "errors": combined_errors,
         })
 
@@ -274,7 +330,8 @@ def main(argv=None) -> int:
 
     run_log = args.out / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     run_log.write_text(json.dumps({
-        "review_threshold": args.review_threshold,
+        "review_threshold": (args.review_threshold if args.review_threshold is not None
+                            else {n: LAYERS[n].default_review_threshold for n in LAYERS}),
         "books": summary,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"wrote {run_log}")
