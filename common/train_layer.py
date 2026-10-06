@@ -240,13 +240,13 @@ def build_metrics(scheme: str, break_penalty: float):
     tags = list(ENTITIES[scheme])
 
     def compute_metrics(eval_pred):
-        logits = np.asarray(eval_pred[0])
-        labels = np.asarray(eval_pred[1])
+        logits, labels = eval_pred[0], eval_pred[1]  # arrays, or per-document lists (stitched)
         res = {}
         acc = {t: [0, 0, 0] for t in tags}      # tp, fp, fn
         acc_argmax = {t: [0, 0, 0] for t in tags}
 
         for lg, lab in zip(logits, labels):
+            lg, lab = np.asarray(lg), np.asarray(lab)
             m = lab != -100
             dec = viterbi(lg[m], scheme, break_penalty)
             arg = lg[m].argmax(-1)
@@ -278,6 +278,52 @@ def build_metrics(scheme: str, break_penalty: float):
             res[f"{key}_argmax_f1"] = prf(a_tp, a_fp, a_fn)[2]
         return res
     return compute_metrics
+
+
+# ---------------------------------------------------------------------------
+# Stitched evaluation: average softmax probabilities where windows overlap
+# ---------------------------------------------------------------------------
+
+def stitch_documents(logits, labels, meta):
+    """Per-window (logits [N,T,C], labels [N,T]) -> per-document lists.
+
+    meta: columns pecha_id, token_start, token_end (window content covers
+    document tokens [token_start, token_end) at window positions
+    1..token_end-token_start; position 0 is CLS). Each document token's
+    probabilities are the mean of softmax over every window covering it,
+    returned as log-probabilities so Viterbi decodes them like logits. Gold
+    labels come from any covering window that did not ignore the token."""
+    n_labels = logits.shape[-1]
+    docs: dict = {}
+    for lg, lab, pid, ts, te in zip(logits, labels, meta["pecha_id"],
+                                    meta["token_start"], meta["token_end"]):
+        d = docs.setdefault(pid, {"n": 0, "wins": []})
+        d["n"] = max(d["n"], te)
+        d["wins"].append((ts, te, lg, lab))
+    out_logits, out_labels = [], []
+    for d in docs.values():
+        n = d["n"]
+        psum = np.zeros((n, n_labels))
+        cnt = np.zeros(n)
+        gold = np.full(n, -100, dtype=np.int64)
+        for ts, te, lg, lab in d["wins"]:
+            k = te - ts
+            lg = np.asarray(lg[1:1 + k], dtype=np.float64)
+            e = np.exp(lg - lg.max(-1, keepdims=True))
+            psum[ts:te] += e / e.sum(-1, keepdims=True)
+            cnt[ts:te] += 1
+            lab = np.asarray(lab[1:1 + k])
+            keep = lab != -100
+            gold[ts:te][keep] = lab[keep]
+        out_logits.append(np.log(np.maximum(psum / np.maximum(cnt, 1)[:, None], 1e-12)))
+        out_labels.append(gold)
+    return out_logits, out_labels
+
+
+def stitched_evaluate(trainer, split_ds, meta, metrics_fn, prefix):
+    pred = trainer.predict(split_ds, metric_key_prefix=prefix)
+    lg, lab = stitch_documents(np.asarray(pred.predictions), np.asarray(pred.label_ids), meta)
+    return {f"{prefix}_stitched_{k}": float(v) for k, v in metrics_fn((lg, lab)).items()}
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +383,14 @@ def main():
     ap.add_argument("--skip-test", action="store_true")
     ap.add_argument("--smoke-test", action="store_true")
     ap.add_argument(
+        "--stitched-eval",
+        action="store_true",
+        help="after training, also score val/test per document with softmax "
+             "probabilities averaged where windows overlap (needs pecha_id, "
+             "token_start, token_end columns). Reported as *_stitched_* keys; "
+             "checkpoint selection still uses the per-window iou50_f1.",
+    )
+    ap.add_argument(
         "--use-features",
         action="store_true",
         help="Concatenate mmBERT hidden state with Linear(5,32)+GELU(features).",
@@ -369,6 +423,12 @@ def main():
         if "features" not in ds["train"].column_names:
             raise SystemExit("--use-features requires a dataset with a 'features' column (v6)")
         keep.append("features")
+    meta = {}
+    if args.stitched_eval:
+        need = ("pecha_id", "token_start", "token_end")
+        if any(c not in ds["validation"].column_names for c in need):
+            raise SystemExit(f"--stitched-eval needs dataset columns {need}")
+        meta = {sp: {c: ds[sp][c] for c in need} for sp in ("validation", "test")}
     ds = ds.remove_columns([c for c in ds["train"].column_names if c not in keep])
 
     # detect whether the stored labels already carry quotation
@@ -513,9 +573,16 @@ def main():
 
     val = trainer.evaluate(eval_ds, metric_key_prefix="val")
     print("\nVALIDATION:", json.dumps(val, indent=2, default=float))
+    metrics_fn = build_metrics(scheme, args.break_penalty)
+    if args.stitched_eval:
+        val.update(stitched_evaluate(trainer, eval_ds, meta["validation"], metrics_fn, "val"))
+        print("\nVALIDATION (stitched, overlap probs averaged):",
+              json.dumps({k: v for k, v in val.items() if "stitched" in k}, indent=2, default=float))
     test = None
     if not args.skip_test:
         test = trainer.evaluate(ds["test"], metric_key_prefix="test")
+        if args.stitched_eval:
+            test.update(stitched_evaluate(trainer, ds["test"], meta["test"], metrics_fn, "test"))
         print("\nTEST:", json.dumps(test, indent=2, default=float))
     else:
         print("\nTEST: skipped. Frozen split, final run only.")
