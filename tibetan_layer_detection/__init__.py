@@ -32,7 +32,8 @@ __version__ = "0.1.0"
 _RESULT_EXCLUDE = {"_batch_summary.json"}
 
 
-def detect(path, layers="all", *, out_dir=None, device=None, review_threshold: float = 0.7,
+def detect(path, layers="all", *, out_dir=None, device=None, review_threshold: float | None = None,
+          stride: int | None = None, dual_window: bool = False,
           write_json: bool = False, write_html: bool = False, write_opf: bool = False):
     """Run the full three-stage pipeline in-process and return the result(s).
 
@@ -51,7 +52,15 @@ def detect(path, layers="all", *, out_dir=None, device=None, review_threshold: f
     device: "cuda" or "cpu"; defaults to cuda if available.
     review_threshold: a span with confidence below this is flagged
         review_needed in the returned data (and in a persisted JSON file,
-        if write_json=True).
+        if write_json=True). Default (None): each layer's own threshold
+        from layer_config.py (tsawa/yigchung 0.5, sabche 0.85, chapter 0.75,
+        quotation 0.65). Passing a number applies it to every layer alike.
+    stride: overrides every requested layer's window stride (smaller means
+        more overlap between windows). Default (None): each layer's own
+        configured stride.
+    dual_window: also run each layer at half window/stride size and flag
+        spans the two sizes disagree on (dual_window_agreement). Roughly
+        doubles inference time per layer.
     write_json / write_html / write_opf: also persist Stage 3's JSON/HTML/
         .opf files under out_dir (see the tibetan-postprocess console
         script's --help for what each one is). A JSON pass always runs
@@ -77,11 +86,17 @@ def detect(path, layers="all", *, out_dir=None, device=None, review_threshold: f
         pre_dir, pred_dir, stage3_dir = base / "preprocessed", base / "predictions", base / "output"
 
         _preprocess.main(["--input", str(path), "--out", str(pre_dir)])
-        _infer.main(["--input", str(pre_dir), "--out", str(pred_dir),
-                    "--layers", *layer_names, "--device", device])
+        infer_argv = ["--input", str(pre_dir), "--out", str(pred_dir),
+                     "--layers", *layer_names, "--device", device]
+        if stride is not None:
+            infer_argv += ["--stride", str(stride)]
+        if dual_window:
+            infer_argv += ["--dual-window"]
+        _infer.main(infer_argv)
 
-        post_argv = ["--input", str(pred_dir), "--source", str(pre_dir), "--out", str(stage3_dir),
-                    "--review-threshold", str(review_threshold), "--json"]
+        post_argv = ["--input", str(pred_dir), "--source", str(pre_dir), "--out", str(stage3_dir), "--json"]
+        if review_threshold is not None:
+            post_argv += ["--review-threshold", str(review_threshold)]
         if write_html:
             post_argv.append("--html")
         if write_opf:
