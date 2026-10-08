@@ -40,7 +40,8 @@ SWAP = "I85485484"
 t.loc[t.pecha_id == SWAP, "tier"] = 1
 t.loc[t.pecha_id == SWAP, "reasons"] = "possible commentary/tsawa label swap (see its section); " + t.loc[t.pecha_id == SWAP, "reasons"]
 t.loc[t.pecha_id.isin(TOP), "tier"] = 0
-t.loc[t.pecha_id.isin(TOP), "reasons"] = "TOP: train/val book, " + t.loc[t.pecha_id.isin(TOP), "reasons"]
+t.loc[t.pecha_id == "I23323023", "reasons"] = "TOP: train book, mislabeled (mantra, scribe note and colophon labeled as tsawa; ~175 question spans to confirm); " + t.loc[t.pecha_id == "I23323023", "reasons"]
+t.loc[t.pecha_id.isin(["I4B1806B4", "I454D2699"]), "reasons"] = "TOP: val book, verify convention: mix of verse and prose, needs annotator judgment; " + t.loc[t.pecha_id.isin(["I4B1806B4", "I454D2699"]), "reasons"]
 flagged = t[t.tier < 4].sort_values(["tier", "n_tsawa"], ascending=[True, False])
 tier_name = {0: "0 TOP", 1: "1 HIGH", 2: "2 dropped", 3: "3 short/overlap"}
 flagged["priority"] = flagged.tier.map(tier_name)
@@ -63,7 +64,10 @@ We checked every tsawa, sabche and chapter layer in the 539 books for things tha
 
 **Review in this order**
 
-1. **Three books that directly affect the model (do these first).** `I23323023` (train, 207 tsawa spans), `I4B1806B4` (val, 69), `I454D2699` (val, 46). Their tsawa layer contains text that is not root-text verse: a mantra, a numbered question, dated colophon lines (`སྤྱི་ལོ་༢༠༢༡ ཟླ་བ་༡༡ ཚེས་༠༨…`), prose sentences. Only 30-42% of their tsawa lines have a verse metre, against about 88% in a normal tsawa book. Please remove or relabel tsawa spans that are not verse. The spans are in the right place (we tested for a position shift and found none); the labels are wrong.
+1. **Three books that directly affect the model (do these first).**
+   - `I23323023` (train, 207 tsawa spans): **mislabeled.** Three tsawa spans are clearly not root text: the bare mantra `ༀ་སྭ་སྟི` (span 0), the scribe's note `འབྲི་བན་དཀོན་མཆོག་བརྟན་འཕེལ…` and the dated colophon `སྤྱི་ལོ་༢༠༢༡ ཟླ་བ་༡༡ ཚེས་༠༨། ཡོ་རོབ་ཝིའ་ན་མཐོ་སློབ` (spans 205 and 206). Remove or relabel those. About 175 more spans are numbered questions ending `ཞུས་པས།` followed by the answer; that looks like a consistent question-and-answer convention, so ask whether it counts as tsawa.
+   - `I4B1806B4` (val, 69) and `I454D2699` (val, 46): **verify convention: mix of verse and prose, needs annotator judgment.** Their tsawa spans are quoted passages (prose in `I4B1806B4`, practice liturgy and mantras in `I454D2699`), each followed by a quote marker (`ཞེས་གསུངས་ཏེ`, `ཞེས་པ་སྟེ`) and an explanation. The labeling is consistent, so this may be intended. Decide whether quoted prose and liturgy count as tsawa.
+   - Only 30-42% of the tsawa lines in these three books have a verse metre, against about 88% in a normal tsawa book. We tested for a position shift and found none; the spans are in the right place.
 2. **Possible commentary/tsawa label swap: `I85485484`.** A 5,985-character prayer book with exactly 1 tsawa span (a closing verse) while 15 of its 22 commentary spans are verse quatrains marked `isverse`. The verses may have been put in the Commentary layer instead of Tsawa. Please check which layer the verse belongs to.
 3. **Other tsawa spans on non-verse text:** {", ".join(f"`{x}`" for x in other_real)}. Mostly scribe or colophon lines and a mantra, all in small or dropped books, so lower impact.
 4. **No Commentary layer but many tsawa spans** ({len(m)} books, at least {q75} tsawa spans each, for example {nm_ids}). Check whether the commentary exists in the text and was never annotated. Many of these may simply be root texts, so look before changing anything.
@@ -87,7 +91,7 @@ L.append(f"""| check | books | notes |
 | Cross-layer overlaps | {ov.pecha_id.nunique()} | {len(ov)} span pairs; no partial (crossing) overlaps anywhere |
 | All no-commentary tsawa books (secondary list) | {len(allnc)} | see the last section |
 """)
-L.append("Zero-overlap check: 59 tsawa books have a Commentary layer that no tsawa span touches. Each was tested for verse versus prose (see Tier 1a). 52 have verse-looking tsawa (the alternating verse/commentary pattern, as in `I6D11E414`) and are NOT priorities. 7 have prose-looking or mixed tsawa and stay HIGH. Shifting the tsawa spans by up to 400 characters in the four larger of those 7 never produced verse-like text, so none is an offset shift; they look like mislabels.\n")
+L.append("Zero-overlap check: 59 tsawa books have a Commentary layer that no tsawa span touches. Each was tested for verse versus prose (see Tier 1a). 52 have verse-looking tsawa (the alternating verse/commentary pattern, as in `I6D11E414`) and are NOT priorities. 7 have prose-looking or mixed tsawa and stay HIGH. Shifting the tsawa spans by up to 400 characters in the four larger of those 7 never produced verse-like text, so none is an offset shift. The cases differ: some are clear mislabels (mantra, scribe note, colophon), others are quoted prose or liturgy that may be a convention (see Tier 1a).\n")
 
 L.append("## Priority list: tsawa\n")
 L.append("Sorted by tier (0 TOP: the three train/val books that affect model quality, 1 HIGH, 2 dropped, 3 short spans or overlap), then tsawa span count. Reasons are all flags a book carries.\n")
@@ -97,7 +101,7 @@ L.append(md(flagged.assign(has_commentary=flagged.has_commentary.map({True: "yes
 L.append("\n### Tier 1a: commentary exists, tsawa never touches it, tsawa text is prose or mixed\n")
 L.append("Verse test: share of shad-delimited clauses inside tsawa spans with 7, 9, 11 or 13 syllables (corpus average about 88%). PROSE < 40%, MIXED 40-60%, VERSE >= 60%. Examples are the first, middle and last span (first 70 chars).\n")
 L.append(md(z.rename(columns={"tsawa_iso_pct": "verse-like clauses %"}), ["pecha_id", "n_tsawa", "n_commentary", "split", "verse-like clauses %", "verdict", "examples"]))
-L.append("\nWhat the examples show: `I23323023` (207 spans) has tsawa on a mantra, a numbered question, and a dated colophon (`སྤྱི་ལོ་༢༠༢༡ ཟླ་བ་༡༡ ཚེས་༠༨། ཡོ་རོབ་ཝིའ་ན་མཐོ་སློབ`); `I069801F1` and `IC3A7006F` have scribe or colophon lines (`འབྲི་བན་དཀོན་མཆོག་བརྟན་འཕེལ`) labelled as tsawa; `I4B1806B4` and `I454D2699` mix real verse (homage, dedication) with prose sentences. `IA3DD1ADA` is a single `མངྒ་ལཾ། བྷ་ཝནྟུ` span.\n")
+L.append("\nWhat the examples show. **Mislabeled:** `I23323023` has tsawa on a bare mantra and on a scribe's note and dated colophon (`སྤྱི་ལོ་༢༠༢༡ ཟླ་བ་༡༡ ཚེས་༠༨། ཡོ་རོབ་ཝིའ་ན་མཐོ་སློབ`); `I069801F1` and `IC3A7006F` have scribe or colophon lines (`འབྲི་བན་དཀོན་མཆོག་བརྟན་འཕེལ`) labelled as tsawa; `IA3DD1ADA` is a single `མངྒ་ལཾ། བྷ་ཝནྟུ` span. **Verify convention (mix of verse and prose, needs annotator judgment):** `I4B1806B4` and `I454D2699` have tsawa spans that are quoted prose, liturgy and mantras followed by an explanation, mixed with real verse (homage, dedication). Also in `I23323023`, about 175 numbered question spans (`... ཞུས་པས།`) follow a consistent question-and-answer pattern.\n")
 L.append("\n#### Removed as false positives (verse-looking tsawa, 52 books)\n")
 L.append("Not errors. Two worth a glance anyway: `I88CF073C` (3 spans, median 1,816 chars, verse-like but very long spans) and `I85485484` (1 tsawa span; its commentary spans are 82% verse-like, so the commentary label may be what is off).\n")
 L.append(md(fp, ["pecha_id", "split", "n_tsawa", "tsawa_iso_pct", "comm_iso_pct", "verdict"]))
