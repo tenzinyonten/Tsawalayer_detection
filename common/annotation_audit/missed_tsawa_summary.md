@@ -67,3 +67,59 @@ Criteria: at least 50 unlabelled runs and run characters at least 5 times the ts
 ## 3. Probably fine
 
 8 training/validation/test books have at least 50 unlabelled runs but their tsawa already covers more than half as much text as the unlabelled verse (ratio under 2), for example `P000078` (ratio 0.9). Their unlabelled verse is likely quotation or the author's own stanzas next to a well-annotated root text. Listed in the CSV (`ratio` column).
+
+
+## 4. Verse that no layer covers
+
+Same runs as above, but a run is dropped if it shares any character with **any** layer in the book (every `layers/v001/*.yml`: Commentary, Sabche, Chapter, Yigchung, Footnote, Quotation, Citation, Author, BookTitle and so on). Tsawa spans were already excluded. What is left is verse that no annotation touches.
+
+- Runs: **9,448 excluding Quotation/Citation only (previous version) -> 6,544 excluding every layer** (20,107 before any exclusion). Characters in those runs: 1,836,045.
+- Books with no such run: 129 of 212 (was 32). In 97 books every previously counted run lies inside some layer.
+- Almost all of the drop is Commentary. Of the 9,448 previous runs, the number that overlap each layer (a run can overlap several): Chapter 15, Commentary 2572, Sabche 335, Yigchung 108, Footnote 4. In books with a Commentary layer the count goes 2,589 -> 1; in books without one 6,859 -> 6,543.
+
+| split | all runs outside tsawa | excluding Quotation/Citation (version above) | excluding every layer |
+|---|---|---|---|
+| dropped | 8,888 | 5,264 | 3,546 |
+| test | 2,027 | 452 | 178 |
+| train | 8,140 | 3,222 | 2,482 |
+| val | 1,052 | 510 | 338 |
+
+
+
+| books with at least N runs | excluding Quotation/Citation | excluding every layer |
+|---|---|---|
+| >= 1 | 180 | 83 |
+| >= 20 | 81 | 45 |
+| >= 50 | 47 | 30 |
+| >= 100 | 24 | 17 |
+
+
+Top 25 books by verse runs that no layer covers:
+
+| book | split | tsawa spans | has Commentary | runs outside Quotation/Citation | runs outside every layer | chars | book chars |
+|---|---|---|---|---|---|---|---|
+| P000218 | train | 22 | False | 670 | 670 | 150,716 | 847,725 |
+| P000054 | dropped | 3 | False | 607 | 606 | 141,734 | 689,458 |
+| P000275 | dropped | 3 | False | 622 | 582 | 212,165 | 580,644 |
+| P000078 | train | 377 | False | 374 | 371 | 68,639 | 842,034 |
+| P000115 | dropped | 1 | False | 311 | 311 | 126,289 | 717,305 |
+| P000089 | dropped | 7 | False | 304 | 304 | 108,839 | 620,370 |
+| P000098 | dropped | 4 | False | 303 | 299 | 65,895 | 629,352 |
+| P000219 | train | 27 | False | 297 | 284 | 63,510 | 335,434 |
+| P000151 | train | 184 | False | 231 | 206 | 35,952 | 507,551 |
+| P000199 | train | 188 | False | 227 | 196 | 32,113 | 702,627 |
+| P000204 | dropped | 7 | False | 168 | 164 | 140,881 | 314,590 |
+| P000111 | dropped | 1 | False | 231 | 163 | 24,747 | 411,816 |
+| P000085 | dropped | 3 | False | 164 | 158 | 27,256 | 752,850 |
+| P000101 | dropped | 5 | False | 141 | 132 | 24,126 | 684,161 |
+| P000161 | val | 337 | False | 131 | 126 | 34,199 | 537,718 |
+| P000068 | train | 103 | False | 131 | 112 | 18,474 | 560,179 |
+| P000188 | dropped | 3 | False | 106 | 106 | 46,254 | 216,193 |
+| P000074 | train | 35 | False | 108 | 98 | 14,516 | 663,463 |
+| P000114 | dropped | 6 | False | 97 | 97 | 20,769 | 207,201 |
+| P000226 | dropped | 2 | False | 99 | 96 | 14,007 | 386,581 |
+| P000028 | val | 103 | False | 86 | 86 | 13,687 | 546,785 |
+| P000179 | train | 170 | False | 104 | 83 | 15,624 | 350,528 |
+| P000066 | dropped | 9 | False | 66 | 66 | 14,966 | 47,162 |
+| P000225 | train | 31 | False | 66 | 66 | 11,437 | 619,695 |
+| P000164 | test | 183 | False | 66 | 66 | 18,072 | 467,097 |

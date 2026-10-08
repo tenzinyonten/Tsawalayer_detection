@@ -22,6 +22,15 @@ def spans(d, name, with_verse=False):
 
 def overlaps(s, e, S): return any(a < e and s < b for a, b, *_ in S)
 
+def all_layers(d, n):
+    """{layer name: [(start, end), ...]} for every layer file in the book (some store a list, not an id map)."""
+    out = {}
+    for f in sorted(glob.glob(f"{d}/layers/v001/*.yml")):
+        y = (yaml.safe_load(open(f, encoding="utf-8")) or {}).get("annotations") or {}
+        items = y if isinstance(y, list) else y.values()
+        out[os.path.basename(f)[:-4]] = [(a["span"]["start"], a["span"]["end"]) for a in items if a.get("span")]
+    return out
+
 def runs(b, mask, strict):
     out, cur, p = [], [], 0
     def flush():
@@ -49,11 +58,22 @@ for pid in audit[audit.has_tsawa_layer == True].pecha_id:
     tl = sum(e - s for s, e in T)
     rec = dict(pecha_id=pid, split=split.get(pid, "dropped"), text_chars=len(b), n_tsawa=len(T), tsawa_chars=tl,
                has_commentary=bool(C))
+    LM = {}                                   # per-layer coverage masks, for the "no layer at all" count
+    for ln, sp_ in all_layers(d, pid).items():
+        m_ = bytearray(len(b))
+        for a_, c_ in sp_: m_[max(0, a_):min(len(b), c_)] = b"\x01" * max(0, min(len(b), c_) - max(0, a_))
+        LM[ln] = m_
     for name, strict in (("strict", True), ("loose", False)):
         R_ = runs(b, mask, strict)
         quoted = [r for r in R_ if overlaps(r[0], r[1], Qt)]
         cverse = [r for r in R_ if any(a < r[1] and r[0] < c and v for a, c, v in C)]
         chars = sum(e - s for s, e, _ in R_)
+        if strict:
+            old_un = [r for r in R_ if r not in quoted]
+            none = [r for r in old_un if not any(any(m_[r[0]:r[1]]) for m_ in LM.values())]
+            rec.update(strict_runs_no_layer=len(none), strict_chars_no_layer=sum(e - s for s, e, _ in none))
+            for ln, m_ in LM.items():
+                rec[f"overlap_{ln}"] = sum(1 for r in old_un if any(m_[r[0]:r[1]]))
         rec.update({f"{name}_runs": len(R_), f"{name}_chars": chars,
                     f"{name}_runs_in_quotation": len(quoted), f"{name}_runs_in_commentary_verse": len(cverse),
                     f"{name}_runs_unexplained": len([r for r in R_ if r not in quoted])})
@@ -92,5 +112,25 @@ L = ["# Where tsawa may be missing: unlabelled verse by book\n",
      md(B.head(30), cols, names),
      f"\n## 3. Probably fine\n",
      f"{len(ok)} training/validation/test books have at least 50 unlabelled runs but their tsawa already covers more than half as much text as the unlabelled verse (ratio under 2), for example `P000078` (ratio 0.9). Their unlabelled verse is likely quotation or the author's own stanzas next to a well-annotated root text. Listed in the CSV (`ratio` column).\n"]
+
+# ---------------- every-layer version ----------------
+d0 = df.fillna(0)
+ovc = [c for c in d0.columns if c.startswith("overlap_")]
+C = d0.sort_values("strict_runs_no_layer", ascending=False)
+top = C.head(25)
+t2 = pd.DataFrame({"book": top.pecha_id, "split": top.split, "tsawa spans": top.n_tsawa.astype(int), "has Commentary": top.has_commentary,
+                   "runs outside Quotation/Citation": top.strict_runs_unexplained.astype(int), "runs outside every layer": top.strict_runs_no_layer.astype(int),
+                   "chars": top.strict_chars_no_layer.astype(int), "book chars": top.text_chars.astype(int)})
+sp_tab = d0.groupby("split")[["strict_runs", "strict_runs_unexplained", "strict_runs_no_layer"]].sum().astype(int).reset_index()
+sp_tab.columns = ["split", "all runs outside tsawa", "excluding Quotation/Citation (version above)", "excluding every layer"]
+thr = pd.DataFrame([{"books with at least N runs": f">= {t}", "excluding Quotation/Citation": int((d0.strict_runs_unexplained >= t).sum()), "excluding every layer": int((d0.strict_runs_no_layer >= t).sum())} for t in (1, 20, 50, 100)])
+L2 = ["\n## 4. Verse that no layer covers\n",
+      "Same runs as above, but a run is dropped if it shares any character with **any** layer in the book (every `layers/v001/*.yml`: Commentary, Sabche, Chapter, Yigchung, Footnote, Quotation, Citation, Author, BookTitle and so on). Tsawa spans were already excluded. What is left is verse that no annotation touches.\n",
+      f"- Runs: **{int(d0.strict_runs_unexplained.sum()):,} excluding Quotation/Citation only (previous version) -> {int(d0.strict_runs_no_layer.sum()):,} excluding every layer** ({int(d0.strict_runs.sum()):,} before any exclusion). Characters in those runs: {int(d0.strict_chars_no_layer.sum()):,}.",
+      f"- Books with no such run: {int((d0.strict_runs_no_layer == 0).sum())} of {len(d0)} (was {int((d0.strict_runs_unexplained == 0).sum())}). In {int(((d0.strict_runs_no_layer == 0) & (d0.strict_runs_unexplained > 0)).sum())} books every previously counted run lies inside some layer.",
+      f"- Almost all of the drop is Commentary. Of the {int(d0.strict_runs_unexplained.sum()):,} previous runs, the number that overlap each layer (a run can overlap several): " + ", ".join(f"{c[8:]} {int(d0[c].sum())}" for c in ovc if d0[c].sum() > 0) + ". In books with a Commentary layer the count goes " + f"{int(d0[d0.has_commentary].strict_runs_unexplained.sum()):,} -> {int(d0[d0.has_commentary].strict_runs_no_layer.sum())}; in books without one {int(d0[~d0.has_commentary].strict_runs_unexplained.sum()):,} -> {int(d0[~d0.has_commentary].strict_runs_no_layer.sum()):,}.\n",
+      md(sp_tab, list(sp_tab.columns), list(sp_tab.columns)), "\n", md(thr, list(thr.columns), list(thr.columns)),
+      "\nTop 25 books by verse runs that no layer covers:\n", md(t2, list(t2.columns), list(t2.columns))]
+L += L2
 open(f"{OUT}/missed_tsawa_summary.md", "w", encoding="utf-8").write("\n".join(L))
 print("summary:", len(A), "dropped,", len(B), "used (", len(Bev), "val/test ),", len(ok), "fine")
