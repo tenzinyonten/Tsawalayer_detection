@@ -16,6 +16,7 @@ We checked every tsawa, sabche and chapter layer in the 539 books for things tha
 5. **30 chapter spans whose end is before their start** in 28 books (list in the chapter section). These are always errors; fix or delete them.
 6. **6 spans that sit exactly on a span of another layer** (5 tsawa = sabche, 1 sabche = chapter), in 5 books (list in the overlaps section). One text region should not carry two layers; decide which one is right.
 7. **Dropped books** (88 books with a tsawa layer but fewer than 10 spans; 54 have 3 or fewer). They were left out of training. If any should be fully annotated, they are the cheapest additions.
+   - Highest priority among them: the 12 dropped books with 5 or fewer tsawa spans and 50 or more uncovered verse runs (`P000115, P000054, P000275, P000111` first; see "Severely under-annotated tsawa books"). A few tsawa spans were marked in a book full of verse, and the rest of the verse is unlabeled.
 8. **Short spans (under 5 characters)**, lowest priority: tsawa 1,499 (1,430 in six books that appear to mark word fragments, so ask first whether that is intended), sabche 28, chapter 62 more (mostly bare 2-character markers such as `༼ཀ`).
 
 **Do not spend time on:** the 52 books that have a Commentary layer with no tsawa overlap but verse-looking tsawa. That is the normal alternating pattern of verse and commentary (for example `I6D11E414`), not an error.
@@ -404,6 +405,29 @@ In the audit CSV these have a tsawa layer but fewer than 10 spans, so they were 
 
 
 Length histogram (chars): 0: 41, 1: 92, 2: 255, 3: 636, 4: 475. Zero-length spans: 41.
+
+
+## Severely under-annotated tsawa books
+
+Books with a Tsawa layer of **5 or fewer spans** and **50 or more verse runs that no layer covers** (4+ consecutive same-metre clauses of 7, 9, 11 or 13 syllables sharing no character with any layer, from `missed_verse_scan.py`). The ratio is uncovered runs per tsawa span; the list is ranked by it, most verse and fewest tsawa first. 12 of the 69 books with 5 or fewer tsawa spans qualify; together they have 31 tsawa spans and 2,626 uncovered runs.
+
+| rank | pecha_id | split | n_tsawa | tsawa_chars | uncovered verse runs | ratio | runs in Quotation/Citation (not counted) | has_commentary | book chars |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | P000115 | dropped | 1 | 1688 | 311 | 311.0 | 4 | False | 717305 |
+| 2 | P000054 | dropped | 3 | 565 | 606 | 202.0 | 91 | False | 689458 |
+| 3 | P000275 | dropped | 3 | 428 | 582 | 194.0 | 0 | False | 580644 |
+| 4 | P000111 | dropped | 1 | 150 | 163 | 163.0 | 27 | False | 411816 |
+| 5 | P000098 | dropped | 4 | 620 | 299 | 74.8 | 191 | False | 629352 |
+| 6 | P000176 | dropped | 1 | 151 | 62 | 62.0 | 27 | False | 262016 |
+| 7 | P000178 | dropped | 1 | 62 | 60 | 60.0 | 1 | False | 47274 |
+| 8 | P000085 | dropped | 3 | 392 | 158 | 52.7 | 161 | False | 752850 |
+| 9 | P000226 | dropped | 2 | 266 | 96 | 48.0 | 7 | False | 386581 |
+| 10 | P000188 | dropped | 3 | 385 | 106 | 35.3 | 51 | False | 216193 |
+| 11 | P000101 | dropped | 5 | 1677 | 132 | 26.4 | 162 | False | 684161 |
+| 12 | P000230 | dropped | 4 | 1408 | 51 | 12.8 | 36 | False | 361653 |
+
+
+All 12 books have the split `dropped`: a book with fewer than 10 tsawa spans is left out of the train, validation and test sets, so none of these annotations is used in training or evaluation today. Books with 20 to 49 uncovered runs and 5 or fewer tsawa spans: 6; books with 6 to 9 tsawa spans and 50 or more uncovered runs: 4. Full table: `under_annotated_tsawa_books.csv`.
 
 ## Priority list: sabche
 

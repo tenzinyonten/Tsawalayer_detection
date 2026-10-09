@@ -5,6 +5,13 @@ dr = pd.read_csv(f"{OUT}/tsawa_dropped_books.csv")
 sh = pd.read_csv(f"{OUT}/short_spans.csv")
 ov = pd.read_csv(f"{OUT}/cross_layer_overlaps.csv")
 
+mv = pd.read_csv(f"{OUT}/missed_tsawa_by_book.csv").fillna(0)
+ua = mv[(mv.n_tsawa <= 5) & (mv.strict_runs_no_layer >= 50)].copy()
+ua["ratio"] = (ua.strict_runs_no_layer / ua.n_tsawa).round(1)
+ua = ua.sort_values(["ratio", "strict_runs_no_layer"], ascending=False).reset_index(drop=True)
+ua.insert(0, "rank", ua.index + 1)
+ua.to_csv(f"{OUT}/under_annotated_tsawa_books.csv", index=False)
+
 def md(df, cols=None):
     df = df[cols] if cols else df
     h = "| " + " | ".join(df.columns) + " |\n|" + "|".join("---" for _ in df.columns) + "|\n"
@@ -74,6 +81,7 @@ We checked every tsawa, sabche and chapter layer in the 539 books for things tha
 5. **{len(inv)} chapter spans whose end is before their start** in {inv.pecha_id.nunique()} books (list in the chapter section). These are always errors; fix or delete them.
 6. **{len(same)} spans that sit exactly on a span of another layer** (5 tsawa = sabche, 1 sabche = chapter), in {same.pecha_id.nunique()} books (list in the overlaps section). One text region should not carry two layers; decide which one is right.
 7. **Dropped books** ({len(dr)} books with a tsawa layer but fewer than 10 spans; {int((dr.n_tsawa<=3).sum())} have 3 or fewer). They were left out of training. If any should be fully annotated, they are the cheapest additions.
+   - Highest priority among them: the {len(ua)} dropped books with 5 or fewer tsawa spans and 50 or more uncovered verse runs (`{", ".join(ua.pecha_id.head(4))}` first; see "Severely under-annotated tsawa books"). A few tsawa spans were marked in a book full of verse, and the rest of the verse is unlabeled.
 8. **Short spans (under 5 characters)**, lowest priority: tsawa 1,499 (1,430 in six books that appear to mark word fragments, so ask first whether that is intended), sabche 28, chapter {int(((sh.layer=="chapter")&(sh.length>=0)).sum())} more (mostly bare 2-character markers such as `༼ཀ`).
 
 **Do not spend time on:** the 52 books that have a Commentary layer with no tsawa overlap but verse-looking tsawa. That is the normal alternating pattern of verse and commentary (for example `I6D11E414`), not an error.
@@ -120,6 +128,12 @@ L.append(f"{len(s)} tsawa spans under 5 characters in {top.shape[0]} books. {int
 L.append(md(top.rename("short spans").reset_index().head(25).rename(columns={"index": "pecha_id"})))
 L.append("\nLength histogram (chars): " + ", ".join(f"{k}: {v}" for k, v in s.length.value_counts().sort_index().items()) + ". Zero-length spans: " + str(int((s.length == 0).sum())) + ".\n")
 
+
+L.append("\n## Severely under-annotated tsawa books\n")
+L.append(f"Books with a Tsawa layer of **5 or fewer spans** and **50 or more verse runs that no layer covers** (4+ consecutive same-metre clauses of 7, 9, 11 or 13 syllables sharing no character with any layer, from `missed_verse_scan.py`). The ratio is uncovered runs per tsawa span; the list is ranked by it, most verse and fewest tsawa first. {len(ua)} of the {int((mv.n_tsawa <= 5).sum())} books with 5 or fewer tsawa spans qualify; together they have {int(ua.n_tsawa.sum())} tsawa spans and {int(ua.strict_runs_no_layer.sum()):,} uncovered runs.\n")
+L.append(md(ua.rename(columns={"strict_runs_no_layer": "uncovered verse runs", "strict_runs_in_quotation": "runs in Quotation/Citation (not counted)", "text_chars": "book chars"}),
+            ["rank", "pecha_id", "split", "n_tsawa", "tsawa_chars", "uncovered verse runs", "ratio", "runs in Quotation/Citation (not counted)", "has_commentary", "book chars"]))
+L.append(f"\nAll {len(ua)} books have the split `dropped`: a book with fewer than 10 tsawa spans is left out of the train, validation and test sets, so none of these annotations is used in training or evaluation today. Books with 20 to 49 uncovered runs and 5 or fewer tsawa spans: {int(((mv.n_tsawa <= 5) & (mv.strict_runs_no_layer >= 20) & (mv.strict_runs_no_layer < 50)).sum())}; books with 6 to 9 tsawa spans and 50 or more uncovered runs: {int(((mv.n_tsawa >= 6) & (mv.n_tsawa <= 9) & (mv.strict_runs_no_layer >= 50)).sum())}. Full table: `under_annotated_tsawa_books.csv`.\n")
 L.append("## Priority list: sabche\n")
 s = sh[sh.layer == "sabche"]
 L.append(f"{len(s)} short spans in {s.pecha_id.nunique()} books (lengths: {dict(s.length.value_counts().sort_index())}).\n")
