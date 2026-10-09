@@ -1,0 +1,13 @@
+# Pinned versions for the tibetan_layer_detection package specifically
+# (pyproject.toml's own dependency list is unpinned, letting pip resolve
+# compatible versions normally; use this file to reproduce the exact
+# environment it was verified against). Not the repo's general
+# requirements.txt, which the rest of this project's tooling (pandas,
+# datasets, tokenizers) still needs and which this file does not replace.
+#
+# Pinned to what was actually installed and tested against on 2026-09-29
+# (this Mac's /usr/bin/python3, Python 3.9.6).
+transformers==4.57.6
+torch==2.8.0
+pyyaml==6.0.3
+numpy==2.0.2

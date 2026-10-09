@@ -1,0 +1,42 @@
+{
+  "model": "gemini-3.1-flash-lite",
+  "prompt": "chapter/docs/prompts/gemini_chapter_anchors.md",
+  "prompt_git_commit": "dc5e686",
+  "prompt_sha256_prefix": "be076656335105d0",
+  "prompt_note": "includes the density instruction (10 or more short heading-like lines means Sabche, return empty). It was written after seeing Claude test errors, so the test set has informed this prompt. Claude test scores used the earlier prompt without it.",
+  "settings": "temperature 1.0, thinking level low, JSON output, 16,000-character windows overlapping by 2,000, 15 requests per minute",
+  "run": "36 test books, 536 windows, scored once. The run stalled on a hung call at 426 windows, was killed and resumed; saved windows were kept and no failed call was cached.",
+  "tokens": {
+    "input": 7505359,
+    "output": 101090
+  },
+  "cost_note": "about 500 rupees per run by the owner's account (not recorded exactly)",
+  "unused_partial_validation": "a validation run with the earlier prompt stopped at 120 of 550 windows on a billing error and is not used anywhere",
+  "test_scores_shared_scorer": {
+    "all 36 books": {
+      "f1": 0.5397225725094578,
+      "precision": 0.4,
+      "recall": 0.8294573643410853,
+      "tp": 214,
+      "n_pred": 535,
+      "n_gold": 258
+    },
+    "old-batch": {
+      "f1": 0.6415094339622642,
+      "precision": 0.53125,
+      "recall": 0.8095238095238095,
+      "tp": 102,
+      "n_pred": 192,
+      "n_gold": 126
+    },
+    "new-batch": {
+      "f1": 0.47157894736842104,
+      "precision": 0.32653061224489793,
+      "recall": 0.8484848484848485,
+      "tp": 112,
+      "n_pred": 343,
+      "n_gold": 132
+    },
+    "median_book_f1": 0.5
+  }
+}

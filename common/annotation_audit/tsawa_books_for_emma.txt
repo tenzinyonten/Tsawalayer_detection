@@ -1,0 +1,116 @@
+===== TRAIN (101) =====
+I0156A8B1  —  under-annotated (1 spans) - mark missed tsawa
+I069801F1  —  dropped (6 spans) - review
+I07240379  —  under-annotated (3 spans) - mark missed tsawa
+I0B81CD66  —  under-annotated (1 spans) - mark missed tsawa
+I163178A0  —  under-annotated (2 spans) - mark missed tsawa
+I1DCBD5CC  —  dropped (8 spans) - review
+I23323023  —  mislabeled - not really tsawa
+I2FCD4B1D  —  under-annotated (2 spans) - mark missed tsawa
+I344D2A4C  —  under-annotated (4 spans) - mark missed tsawa
+I5048861E  —  under-annotated (3 spans) - mark missed tsawa
+I51B9FE5F  —  under-annotated (1 spans) - mark missed tsawa
+I52248444  —  under-annotated (2 spans) - mark missed tsawa
+I5BFCBB3F  —  under-annotated (2 spans) - mark missed tsawa
+I5F5D9F5A  —  under-annotated (3 spans) - mark missed tsawa
+I60D0ED54  —  under-annotated (2 spans) - mark missed tsawa
+I62D7430C  —  dropped (9 spans) - review
+I6380CEC4  —  under-annotated (2 spans) - mark missed tsawa
+I6EFF9668  —  under-annotated (5 spans) - mark missed tsawa
+I6F43CD1F  —  under-annotated (1 spans) - mark missed tsawa
+I74772DFF  —  under-annotated (4 spans) - mark missed tsawa
+I786395B4  —  under-annotated (5 spans) - mark missed tsawa
+I8062BDF5  —  under-annotated (1 spans) - mark missed tsawa
+I849C345E  —  under-annotated (3 spans) - mark missed tsawa
+I85485484  —  mislabeled - not really tsawa; under-annotated (1 spans) - mark missed tsawa
+I85C28EDA  —  dropped (6 spans) - review
+I88CF073C  —  under-annotated (3 spans) - mark missed tsawa
+I88DA3111  —  under-annotated (4 spans) - mark missed tsawa
+I8961718B  —  under-annotated (5 spans) - mark missed tsawa
+I8A57AE06  —  under-annotated (2 spans) - mark missed tsawa
+I91949F99  —  under-annotated (2 spans) - mark missed tsawa
+I9779E60E  —  under-annotated (5 spans) - mark missed tsawa
+I97B90DC0  —  under-annotated (2 spans) - mark missed tsawa
+IA3DD1ADA  —  under-annotated (1 spans) - mark missed tsawa
+IAA85B9B5  —  under-annotated (4 spans) - mark missed tsawa
+IB45DE768  —  under-annotated (2 spans) - mark missed tsawa
+IB47565DE  —  under-annotated (1 spans) - mark missed tsawa
+IB5F523B2  —  under-annotated (2 spans) - mark missed tsawa
+IB8EEB9FB  —  under-annotated (1 spans) - mark missed tsawa
+IBBB26EA1  —  under-annotated (2 spans) - mark missed tsawa
+IBF8C5BB6  —  dropped (7 spans) - review
+IC3A7006F  —  under-annotated (1 spans) - mark missed tsawa
+IC555D0EB  —  under-annotated (2 spans) - mark missed tsawa
+IC99C24DC  —  under-annotated (2 spans) - mark missed tsawa
+ICC9840B6  —  under-annotated (2 spans) - mark missed tsawa
+IDACD7FC0  —  under-annotated (3 spans) - mark missed tsawa
+IDBFF9DE3  —  under-annotated (2 spans) - mark missed tsawa
+IDDB46142  —  under-annotated (1 spans) - mark missed tsawa
+IE166DA22  —  under-annotated (4 spans) - mark missed tsawa
+IE2421BEA  —  dropped (8 spans) - review
+IE79CC998  —  under-annotated (2 spans) - mark missed tsawa
+IEA9B747E  —  under-annotated (2 spans) - mark missed tsawa
+IEEBAD11E  —  under-annotated (2 spans) - mark missed tsawa
+IF4C4BF01  —  under-annotated (1 spans) - mark missed tsawa
+IF6B54962  —  under-annotated (2 spans) - mark missed tsawa
+IF85C9484  —  under-annotated (2 spans) - mark missed tsawa
+IFA88A536  —  under-annotated (1 spans) - mark missed tsawa
+P000017  —  dropped (7 spans) - review
+P000054  —  under-annotated (3 spans) - mark missed tsawa
+P000066  —  dropped (9 spans) - review
+P000068  —  offset drift - re-align positions
+P000073  —  under-annotated (2 spans) - mark missed tsawa
+P000074  —  offset drift - re-align positions
+P000085  —  under-annotated (3 spans) - mark missed tsawa
+P000089  —  dropped (7 spans) - review
+P000098  —  under-annotated (4 spans) - mark missed tsawa
+P000101  —  under-annotated (5 spans) - mark missed tsawa
+P000111  —  under-annotated (1 spans) - mark missed tsawa
+P000114  —  dropped (6 spans) - review
+P000115  —  under-annotated (1 spans) - mark missed tsawa
+P000117  —  offset drift - re-align positions
+P000135  —  under-annotated (2 spans) - mark missed tsawa
+P000151  —  offset drift - re-align positions
+P000153  —  offset drift - re-align positions
+P000155  —  under-annotated (4 spans) - mark missed tsawa
+P000168  —  under-annotated (5 spans) - mark missed tsawa
+P000170  —  under-annotated (2 spans) - mark missed tsawa
+P000172  —  dropped (8 spans) - review
+P000176  —  under-annotated (1 spans) - mark missed tsawa
+P000177  —  dropped (8 spans) - review
+P000178  —  under-annotated (1 spans) - mark missed tsawa
+P000179  —  offset drift - re-align positions
+P000180  —  under-annotated (1 spans) - mark missed tsawa
+P000185  —  offset drift - re-align positions
+P000188  —  under-annotated (3 spans) - mark missed tsawa
+P000189  —  under-annotated (2 spans) - mark missed tsawa
+P000193  —  offset drift - re-align positions
+P000194  —  under-annotated (5 spans) - mark missed tsawa
+P000195  —  offset drift - re-align positions
+P000199  —  offset drift - re-align positions
+P000200  —  under-annotated (2 spans) - mark missed tsawa
+P000201  —  under-annotated (5 spans) - mark missed tsawa
+P000204  —  dropped (7 spans) - review
+P000217  —  under-annotated (2 spans) - mark missed tsawa
+P000219  —  offset drift - re-align positions
+P000225  —  offset drift - re-align positions
+P000226  —  under-annotated (2 spans) - mark missed tsawa
+P000230  —  under-annotated (4 spans) - mark missed tsawa
+P000251  —  under-annotated (5 spans) - mark missed tsawa
+P000253  —  dropped (7 spans) - review
+P000254  —  dropped (8 spans) - review
+P000275  —  under-annotated (1 spans) - mark missed tsawa
+
+===== VALIDATION (4) =====
+I454D2699  —  mislabeled - not really tsawa
+I4B1806B4  —  mislabeled - not really tsawa
+P000175  —  offset drift - re-align positions
+P000215  —  offset drift - re-align positions
+
+===== TEST (already sent as benchmark) (5) =====
+P000027  —  offset drift - re-align positions
+P000083  —  offset drift - re-align positions
+P000144  —  offset drift - re-align positions
+P000242  —  offset drift - re-align positions
+P000269  —  offset drift - re-align positions
+
