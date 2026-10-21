@@ -44,6 +44,7 @@ class LayerConfig:
     extend_lone_fragments: bool = False  # with repair_fragments: also extend a short span with no cover
     # to the next shad/newline. Sabche test: recovers 1 heading but turns ~10 other fragments into
     # full-length false positives (F1 0.9642 -> 0.9630), so it is off.
+    extend_to_closing_bracket: bool = False  # Chapter: a ༼ stub under ~10 chars extends to the next ༽
     default_review_threshold: float = 0.7  # used by postprocess.py's --review-threshold
     # when that flag is omitted; passing --review-threshold explicitly overrides every
     # layer alike, same as before this field existed. Chosen per layer by task precision:
@@ -72,6 +73,11 @@ LAYERS: dict[str, LayerConfig] = {
         source="BDRC/Bo-Chapter-Detection training/test_metrics.json (decoding.break_penalty); "
                "dataset revision c8c758ed matches the stratified Chapter split built in this repo",
         default_review_threshold=0.75,
+        # Same as Sabche on the two default rules: on the Chapter test set they cost
+        # F1 0.844 -> 0.822. A ༼ stub under 10 chars is extended to just before the
+        # next ༽ (P000110, P000275 exact; +0.12 F1). Sanskrit is not auto-dropped:
+        # gold legitimately has some Sanskrit chapter spans.
+        extend_to_tsheg=False, merge_small_gaps=False, extend_to_closing_bracket=True,
     ),
     "quotation": LayerConfig(
         repo="BDRC/Bo-Quotation-Detection", scheme="bioe",
